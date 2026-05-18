@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>设置 - 模型配置</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-primary: #1a1a1a;
+      --bg-secondary: #252525;
+      --bg-tertiary: #2d2d2d;
+      --bg-hover: #363636;
+      --text-primary: #e0e0e0;
+      --text-secondary: #a0a0a0;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --border: #3d3d3d;
+      --success: #22c55e;
+      --error: #ef4444;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 20px;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .settings-section {
+      margin-bottom: 32px;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 6px;
+      color: var(--text-secondary);
+    }
+
+    .form-group input, .form-group select {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      font-size: 14px;
+      outline: none;
+    }
+
+    .form-group input:focus, .form-group select:focus {
+      border-color: var(--accent);
+    }
+
+    .form-row {
+      display: flex;
+      gap: 16px;
+    }
+
+    .form-row .form-group {
+      flex: 1;
+    }
+
+    /* 模型列表 */
+    .model-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .model-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .model-item.selected {
+      border-color: var(--accent);
+    }
+
+    .model-info {
+      flex: 1;
+    }
+
+    .model-name {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .model-provider {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .model-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: none;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+
+    .btn-secondary {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    .btn-secondary:hover {
+      background: var(--bg-hover);
+    }
+
+    .btn-danger {
+      background: var(--error);
+      color: white;
+    }
+
+    .btn-danger:hover {
+      opacity: 0.9;
+    }
+
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    /* 添加模型表单 */
+    .add-model-form {
+      display: none;
+      padding: 16px;
+      background: var(--bg-tertiary);
+      border-radius: 8px;
+      margin-top: 12px;
+    }
+
+    .add-model-form.active {
+      display: block;
+    }
+
+    .form-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      justify-content: flex-end;
+    }
+
+    /* 预设模型 */
+    .preset-models {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .preset-model {
+      padding: 10px 12px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: left;
+    }
+
+    .preset-model:hover {
+      border-color: var(--accent);
+      background: var(--bg-hover);
+    }
+
+    .preset-model.active {
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+
+    .preset-model .name {
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .preset-model .desc {
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+
+    /* 测试连接 */
+    .test-result {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      display: none;
+    }
+
+    .test-result.success {
+      display: block;
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid var(--success);
+      color: var(--success);
+    }
+
+    .test-result.error {
+      display: block;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid var(--error);
+      color: var(--error);
+    }
+  </style>
+</head>
+<body>
+  <h1>设置 - 模型配置</h1>
+
+  <!-- API 配置 -->
+  <div class="settings-section">
+    <div class="section-title">API 配置</div>
+    <div class="form-group">
+      <label>API Key</label>
+      <input type="password" id="apiKey" placeholder="输入你的 API Key" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>API 端点</label>
+        <input type="text" id="apiEndpoint" placeholder="https://api.anthropic.com" />
+      </div>
+      <div class="form-group">
+        <label>默认模型</label>
+        <select id="defaultModel">
+          <option value="claude-3-opus-20240229">Claude-3-Opus</option>
+          <option value="claude-3-sonnet-20240229">Claude-3-Sonnet</option>
+          <option value="claude-3-haiku-20240307">Claude-3-Haiku</option>
+          <option value="claude-3-5-sonnet-20241022">Claude-3.5-Sonnet</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>最大 Tokens</label>
+        <input type="number" id="maxTokens" value="4096" min="1" max="100000" />
+      </div>
+      <div class="form-group">
+        <label>温度 (0-1)</label>
+        <input type="number" id="temperature" value="0.7" min="0" max="1" step="0.1" />
+      </div>
+    </div>
+    <button class="btn btn-secondary" onclick="testConnection()">测试连接</button>
+    <div class="test-result" id="testResult"></div>
+  </div>
+
+  <!-- 第三方模型 -->
+  <div class="settings-section">
+    <div class="section-title">第三方模型</div>
+
+    <div class="section-title" style="font-size: 12px; margin-bottom: 8px;">预设模型（点击添加）</div>
+    <div class="preset-models">
+      <div class="preset-model" onclick="addPresetModel('openai', 'GPT-4o', 'gpt-4o', 'https://api.openai.com/v1')">
+        <div class="name">GPT-4o</div>
+        <div class="desc">OpenAI - 强大的多模态模型</div>
+      </div>
+      <div class="preset-model" onclick="addPresetModel('openai', 'GPT-4-Turbo', 'gpt-4-turbo', 'https://api.openai.com/v1')">
+        <div class="name">GPT-4-Turbo</div>
+        <div class="desc">OpenAI - 高性能文本模型</div>
+      </div>
+      <div class="preset-model" onclick="addPresetModel('openai', 'GPT-3.5-Turbo', 'gpt-3.5-turbo', 'https://api.openai.com/v1')">
+        <div class="name">GPT-3.5-Turbo</div>
+        <div class="desc">OpenAI - 快速且经济</div>
+      </div>
+      <div class="preset-model" onclick="addPresetModel('deepseek', 'DeepSeek-V3', 'deepseek-chat', 'https://api.deepseek.com')">
+        <div class="name">DeepSeek-V3</div>
+        <div class="desc">DeepSeek - 高性价比中文模型</div>
+      </div>
+      <div class="preset-model" onclick="addPresetModel('deepseek', 'DeepSeek-Coder', 'deepseek-coder', 'https://api.deepseek.com')">
+        <div class="name">DeepSeek-Coder</div>
+        <div class="desc">DeepSeek - 专业代码模型</div>
+      </div>
+      <div class="preset-model" onclick="addPresetModel('qwen', 'Qwen-Max', 'qwen-max', 'https://dashscope.aliyuncs.com/compatible-mode')">
+        <div class="name">Qwen-Max</div>
+        <div class="desc">通义千问 - 强大中文能力</div>
+      </div>
+      <div class="preset-model" onclick="addPresetModel('zhipu', 'GLM-4', 'glm-4', 'https://open.bigmodel.cn/api/paas')">
+        <div class="name">GLM-4</div>
+        <div class="desc">智谱AI - 优秀中文理解</div>
+      </div>
+      <div class="preset-model" onclick="addPresetModel('moonshot', 'Moonshot-v1-8k', 'moonshot-v1-8k', 'https://api.moonshot.cn')">
+        <div class="name">Moonshot-v1-8k</div>
+        <div class="desc">月之暗面 - 长上下文模型</div>
+      </div>
+    </div>
+
+    <div class="model-list" id="modelList">
+      <!-- 模型列表 -->
+    </div>
+
+    <button class="btn btn-primary" onclick="toggleAddForm()" style="margin-top: 12px;">
+      + 添加自定义模型
+    </button>
+
+    <div class="add-model-form" id="addModelForm">
+      <div class="form-row">
+        <div class="form-group">
+          <label>模型名称</label>
+          <input type="text" id="modelName" placeholder="例如: My-GPT-4" />
+        </div>
+        <div class="form-group">
+          <label>模型 ID</label>
+          <input type="text" id="modelId" placeholder="例如: gpt-4" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>提供商</label>
+          <select id="modelProvider">
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="qwen">通义千问</option>
+            <option value="zhipu">智谱AI</option>
+            <option value="moonshot">月之暗面</option>
+            <option value="custom">自定义</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>API 端点</label>
+          <input type="text" id="modelEndpoint" placeholder="https://api.example.com/v1" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>API Key（可选，留空使用全局配置）</label>
+        <input type="password" id="modelApiKey" placeholder="模型专属 API Key" />
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="toggleAddForm()">取消</button>
+        <button class="btn btn-primary" onclick="saveCustomModel()">保存模型</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    let models = [];
+
+    // 初始化
+    async function init() {
+      const config = await ipcRenderer.invoke('get-config');
+      models = await ipcRenderer.invoke('get-models');
+
+      document.getElementById('apiKey').value = config.apiKey || '';
+      document.getElementById('apiEndpoint').value = config.apiEndpoint || 'https://api.anthropic.com';
+      document.getElementById('defaultModel').value = config.defaultModel || 'claude-3-opus-20240229';
+      document.getElementById('maxTokens').value = config.maxTokens || 4096;
+      document.getElementById('temperature').value = config.temperature || 0.7;
+
+      renderModels();
+
+      // 自动保存
+      document.querySelectorAll('input, select').forEach(el => {
+        el.addEventListener('change', saveConfig);
+      });
+    }
+
+    // 保存配置
+    async function saveConfig() {
+      await ipcRenderer.invoke('set-config', 'apiKey', document.getElementById('apiKey').value);
+      await ipcRenderer.invoke('set-config', 'apiEndpoint', document.getElementById('apiEndpoint').value);
+      await ipcRenderer.invoke('set-config', 'defaultModel', document.getElementById('defaultModel').value);
+      await ipcRenderer.invoke('set-config', 'maxTokens', parseInt(document.getElementById('maxTokens').value));
+      await ipcRenderer.invoke('set-config', 'temperature', parseFloat(document.getElementById('temperature').value));
+    }
+
+    // 测试连接
+    async function testConnection() {
+      const resultEl = document.getElementById('testResult');
+      resultEl.className = 'test-result';
+      resultEl.textContent = '测试中...';
+
+      try {
+        const apiKey = document.getElementById('apiKey').value;
+        const endpoint = document.getElementById('apiEndpoint').value;
+
+        if (!apiKey) {
+          throw new Error('请输入 API Key');
+        }
+
+        const response = await fetch(`${endpoint}/v1/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: document.getElementById('defaultModel').value,
+            max_tokens: 10,
+            messages: [{ role: 'user', content: 'Hi' }]
+          })
+        });
+
+        if (response.ok) {
+          resultEl.className = 'test-result success';
+          resultEl.textContent = '✓ 连接成功！';
+        } else {
+          const error = await response.json();
+          throw new Error(error.error?.message || '连接失败');
+        }
+      } catch (error) {
+        resultEl.className = 'test-result error';
+        resultEl.textContent = `✗ ${error.message}`;
+      }
+    }
+
+    // 渲染模型列表
+    function renderModels() {
+      const listEl = document.getElementById('modelList');
+      listEl.innerHTML = models.map((model, index) => `
+        <div class="model-item ${model.id === document.getElementById('defaultModel').value ? 'selected' : ''}">
+          <div class="model-info">
+            <div class="model-name">${model.name}</div>
+            <div class="model-provider">${model.provider} - ${model.id}</div>
+          </div>
+          <div class="model-actions">
+            <button class="btn btn-secondary btn-small" onclick="setDefaultModel('${model.id}')">设为默认</button>
+            <button class="btn btn-danger btn-small" onclick="removeModel(${index})">删除</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // 添加预设模型
+    async function addPresetModel(provider, name, id, endpoint) {
+      const exists = models.some(m => m.id === id);
+      if (exists) {
+        alert('该模型已添加');
+        return;
+      }
+
+      models = await ipcRenderer.invoke('add-model', {
+        provider,
+        name,
+        id,
+        endpoint,
+        apiKey: ''
+      });
+
+      renderModels();
+    }
+
+    // 切换添加表单
+    function toggleAddForm() {
+      const form = document.getElementById('addModelForm');
+      form.classList.toggle('active');
+    }
+
+    // 保存自定义模型
+    async function saveCustomModel() {
+      const name = document.getElementById('modelName').value;
+      const id = document.getElementById('modelId').value;
+      const provider = document.getElementById('modelProvider').value;
+      const endpoint = document.getElementById('modelEndpoint').value;
+      const apiKey = document.getElementById('modelApiKey').value;
+
+      if (!name || !id) {
+        alert('请填写模型名称和 ID');
+        return;
+      }
+
+      models = await ipcRenderer.invoke('add-model', {
+        provider,
+        name,
+        id,
+        endpoint,
+        apiKey
+      });
+
+      // 清空表单
+      document.getElementById('modelName').value = '';
+      document.getElementById('modelId').value = '';
+      document.getElementById('modelEndpoint').value = '';
+      document.getElementById('modelApiKey').value = '';
+      toggleAddForm();
+
+      renderModels();
+    }
+
+    // 删除模型
+    async function removeModel(index) {
+      if (confirm('确定要删除这个模型吗？')) {
+        models = await ipcRenderer.invoke('remove-model', index);
+        renderModels();
+      }
+    }
+
+    // 设为默认模型
+    async function setDefaultModel(modelId) {
+      document.getElementById('defaultModel').value = modelId;
+      await saveConfig();
+      renderModels();
+    }
+
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,2748 @@
+// IPC via preload bridge (window.api)
+
+// 日志函数
+function log(msg) { console.log('[cc-wrap]', msg); }
+function logError(msg) { console.error('[cc-wrap ERROR]', msg); }
+
+// ========== 国际化 ==========
+var I18N = {
+  zh: {
+    newChat: '新对话', exportBtn: '导出', sendPlaceholder: '输入消息... (Enter 发送, Ctrl+V 粘贴图片)',
+    useTools: '使用工具', streamMode: '流式响应', stopHint: '停止生成 (Escape)',
+    settings: '设置', memory: '记忆', mcp: 'MCP', skills: 'Skills',
+    tabConversations: '对话', tabFiles: '文件',
+    // 设置国际化
+    apiConfig: 'API配置', themeSettings: '主题设置', generalSettings: '通用设置',
+    globalConfig: '全局配置', apiKeyLabel: '全局 API 密钥（Claude 模型使用）',
+    defaultModel: '默认模型', maxTokens: '最大Token数', saveConfig: '保存全局配置',
+    addModel: '添加第三方模型', modelName: '模型名称', modelId: '模型ID',
+    apiEndpoint: 'API端点', apiKeyModel: 'API密钥', modelPlaceholderKey: '模型专属密钥',
+    addModelBtn: '添加模型', addedModels: '已添加的模型', noModels: '暂无第三方模型',
+    endpointDefault: '默认', keySet: '已设置', keyNotSet: '未设置',
+    editModel: '编辑', deleteModel: '删除', confirmDelete: '确定删除模型',
+    saved: '已保存', added: '已添加', fillNameId: '请填写模型名称和ID',
+    // 主题
+    chooseTheme: '选择主题', darkMode: '深色模式', lightMode: '浅色模式',
+    // 通用
+    langLabel: '界面语言 / Language', workDir: '工作目录', selectDir: '选择',
+    allowedTools: '允许的工具',
+  },
+  en: {
+    newChat: 'New Chat', exportBtn: 'Export', sendPlaceholder: 'Type a message... (Enter to send, Ctrl+V paste image)',
+    useTools: 'Tools', streamMode: 'Streaming', stopHint: 'Stop (Escape)',
+    settings: 'Settings', memory: 'Memory', mcp: 'MCP', skills: 'Skills',
+    tabConversations: 'Chat', tabFiles: 'Files',
+    // Settings i18n
+    apiConfig: 'API Configuration', themeSettings: 'Theme Settings', generalSettings: 'General',
+    globalConfig: 'Global Configuration', apiKeyLabel: 'Global API Key (used by Claude models)',
+    defaultModel: 'Default Model', maxTokens: 'Max Tokens', saveConfig: 'Save Configuration',
+    addModel: 'Add Custom Model', modelName: 'Model Name', modelId: 'Model ID',
+    apiEndpoint: 'API Endpoint', apiKeyModel: 'API Key', modelPlaceholderKey: 'Model-specific key (optional)',
+    addModelBtn: 'Add Model', addedModels: 'Added Models', noModels: 'No custom models',
+    endpointDefault: 'default', keySet: 'Set', keyNotSet: 'Not set',
+    editModel: 'Edit', deleteModel: 'Delete', confirmDelete: 'Are you sure you want to delete model',
+    saved: 'Saved', added: 'Added', fillNameId: 'Please enter model name and ID',
+    // Theme
+    chooseTheme: 'Choose Theme', darkMode: 'Dark Mode', lightMode: 'Light Mode',
+    // General
+    langLabel: 'Interface Language', workDir: 'Working Directory', selectDir: 'Select',
+    allowedTools: 'Allowed Tools',
+  }
+};
+function t(key) {
+  var lang = (state.config && state.config.language) || 'zh';
+  return (I18N[lang] && I18N[lang][key]) || I18N.zh[key] || key;
+}
+function applyLanguage() {
+  var lang = (state.config && state.config.language) || 'zh';
+  var el;
+  // newChatBtn 保持为 "+" 图标按钮，只更新 title
+  el = $('newChatBtn'); if (el) el.title = t('newChat');
+  el = $('exportBtn'); if (el) el.textContent = t('exportBtn');
+  el = $('messageInput'); if (el) el.placeholder = t('sendPlaceholder');
+  el = $('settingsBtn'); if (el) el.textContent = t('settings');
+  el = $('memoryBtn'); if (el) el.textContent = t('memory');
+  el = $('mcpBtn'); if (el) el.textContent = t('mcp');
+  var useToolsLabel = document.querySelector('label[for="useTools"]') || $('useTools')?.parentElement;
+  if (useToolsLabel) useToolsLabel.childNodes[useToolsLabel.childNodes.length - 1].textContent = ' ' + t('useTools');
+  var streamLabel = document.querySelector('label[for="streamMode"]') || $('streamMode')?.parentElement;
+  if (streamLabel) streamLabel.childNodes[streamLabel.childNodes.length - 1].textContent = ' ' + t('streamMode');
+  el = $('stopBtn'); if (el) el.title = t('stopHint');
+  document.querySelectorAll('.tab-btn').forEach(function(btn, i) {
+    if (i === 0) btn.textContent = t('tabConversations');
+    else if (i === 1) btn.textContent = t('tabFiles');
+  });
+  // 设置 tab 标签
+  document.querySelectorAll('.stab').forEach(function(btn) {
+    var tab = btn.getAttribute('data-stab');
+    if (tab === 'api') btn.textContent = t('apiConfig');
+    else if (tab === 'theme') btn.textContent = t('themeSettings');
+    else if (tab === 'general') btn.textContent = t('generalSettings');
+  });
+}
+
+// 状态
+const state = {
+  conversations: [],
+  currentConversation: null,
+  config: {},
+  models: [],
+  skills: [],
+  mcpServers: [],
+  mcpStatuses: [],
+  workDir: '',
+  memories: [],
+  isGenerating: false,
+  attachedImage: null,
+  allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'ListDirectory'],
+  theme: 'dark',
+  // 文件编辑器状态
+  openFiles: [],       // [{name, path, content, originalContent, modified}]
+  activeFileIndex: -1, // 当前激活的文件索引
+  // Agent loop 状态
+  currentLoopId: null,
+  agentMessages: []    // Anthropic 格式的消息历史
+};
+
+// 斜杠命令定义
+const SLASH_COMMANDS = [
+  { name: '/help', desc: '显示帮助信息' },
+  { name: '/clear', desc: '清空当前对话' },
+  { name: '/compact', desc: '压缩对话历史，节省 Token' },
+  { name: '/config', desc: '打开设置面板' },
+  { name: '/cost', desc: '查看当前会话 Token 消耗' },
+  { name: '/export', desc: '导出对话到剪贴板' },
+  { name: '/init', desc: '在工作目录初始化 CLAUDE.md' },
+  { name: '/mcp', desc: '管理 MCP 服务器' },
+  { name: '/memory', desc: '管理记忆' },
+  { name: '/model', desc: '切换模型' },
+  { name: '/permissions', desc: '管理工具权限' },
+  { name: '/skill', desc: '引用自定义 Skill' },
+  { name: '/theme', desc: '切换深色/浅色主题' },
+  { name: '/tools', desc: '查看可用工具列表' },
+  { name: '/workdir', desc: '查看/设置工作目录' }
+];
+
+function $(id) { return document.getElementById(id); }
+function esc(text) {
+  if (!text) return '';
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// 初始化
+async function init() {
+  log('初始化开始...');
+
+  try {
+    state.config = await window.api.invoke('get-config');
+    log('配置已加载: ' + JSON.stringify(Object.keys(state.config)));
+  } catch (e) {
+    logError('配置加载失败: ' + e.message);
+    state.config = {};
+  }
+
+  // 应用语言设置
+  applyLanguage();
+
+  // 加载标题栏图标
+  (async () => {
+    try {
+      const iconDataUrl = await window.api.invoke('get-app-icon');
+      if (iconDataUrl) {
+        const drag = document.querySelector('.titlebar-drag');
+        if (drag) {
+          const img = document.createElement('img');
+          img.src = iconDataUrl;
+          img.className = 'titlebar-icon';
+          img.alt = '';
+          drag.prepend(img);
+        }
+      }
+    } catch (e) { /* 图标加载失败不影响主流程 */ }
+  })();
+
+  try {
+    state.conversations = JSON.parse(localStorage.getItem('conversations') || '[]');
+  } catch (e) {
+    state.conversations = [];
+  }
+
+  state.workDir = state.config.workDirectory || '';
+  state.theme = state.config.theme || 'dark';
+
+  // 加载记忆
+  try {
+    var memResult = await window.api.invoke('get-memory');
+    if (memResult && memResult.memories) {
+      state.memories = memResult.memories;
+    }
+  } catch (e) {
+    logError('记忆加载失败: ' + e.message);
+  }
+
+  // 加载 Skills
+  try {
+    var skillResult = await window.api.invoke('get-skills');
+    if (skillResult && skillResult.skills) {
+      state.skills = skillResult.skills;
+    }
+  } catch (e) {
+    logError('Skills加载失败: ' + e.message);
+  }
+
+  // 加载 MCP 服务器
+  try {
+    var mcpResult = await window.api.invoke('get-mcp-servers');
+    if (mcpResult && mcpResult.servers) {
+      state.mcpServers = mcpResult.servers;
+    }
+  } catch (e) {
+    logError('MCP加载失败: ' + e.message);
+  }
+
+  // 模型列表
+  state.models = [
+    { name: 'Claude-3-Opus', id: 'claude-3-opus-20240229' },
+    { name: 'Claude-3-Sonnet', id: 'claude-3-sonnet-20240229' },
+    { name: 'Claude-3.5-Sonnet', id: 'claude-3-5-sonnet-20241022' }
+  ];
+  if (state.config.models && state.config.models.length > 0) {
+    for (var i = 0; i < state.config.models.length; i++) {
+      var m = state.config.models[i];
+      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider });
+    }
+  }
+
+  applyTheme(state.theme);
+  renderModelSelect();
+  renderConversations();
+  renderSkills();
+  setupEvents();
+
+  log('初始化完成');
+
+  // 自动聚焦输入框
+  var msgInput = $('messageInput');
+  if (msgInput) setTimeout(function() { msgInput.focus(); }, 100);
+}
+
+// 事件绑定
+function setupEvents() {
+  // 窗口控制
+  var btnMin = $('btnMinimize');
+  if (btnMin) btnMin.onclick = function() { window.api.invoke('window-minimize'); };
+  var btnMax = $('btnMaximize');
+  if (btnMax) btnMax.onclick = function() { window.api.invoke('window-maximize'); };
+  var btnClose = $('btnClose');
+  if (btnClose) btnClose.onclick = function() { window.api.invoke('window-close'); };
+
+  // 新建对话
+  var newBtn = $('newChatBtn');
+  if (newBtn) newBtn.onclick = function() { createNewConversation(); };
+
+  // 发送按钮
+  var sendBtn = $('sendBtn');
+  if (sendBtn) sendBtn.onclick = function() { sendMessage(); };
+
+  // 停止按钮
+  var stopBtn = $('stopBtn');
+  if (stopBtn) stopBtn.onclick = function() { stopGeneration(); };
+
+  // 附件按钮
+  var attachBtn = $('attachBtn');
+  if (attachBtn) attachBtn.onclick = function() { uploadImage(); };
+
+  // 输入框
+  var input = $('messageInput');
+  if (input) {
+    var acIndex = -1;
+    var acCommands = [];
+
+    input.onkeydown = function(e) {
+      var acEl = $('commandAutocomplete');
+
+      // 自动补全导航
+      if (acEl && acEl.style.display !== 'none') {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          acIndex = Math.min(acIndex + 1, acCommands.length - 1);
+          updateAcHighlight(acEl, acIndex);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          acIndex = Math.max(acIndex - 1, 0);
+          updateAcHighlight(acEl, acIndex);
+          return;
+        }
+        if (e.key === 'Tab' || (e.key === 'Enter' && acIndex >= 0)) {
+          e.preventDefault();
+          if (acIndex >= 0 && acIndex < acCommands.length) {
+            input.value = acCommands[acIndex].name + ' ';
+          }
+          acEl.style.display = 'none';
+          acIndex = -1;
+          return;
+        }
+        if (e.key === 'Escape') {
+          acEl.style.display = 'none';
+          acIndex = -1;
+          return;
+        }
+      }
+
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    };
+
+    input.oninput = function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 160) + 'px';
+
+      // 斜杠命令自动补全
+      var val = this.value;
+      var acEl = $('commandAutocomplete');
+      if (!acEl) return;
+
+      if (val.startsWith('/')) {
+        var query = val.toLowerCase();
+        acCommands = SLASH_COMMANDS.filter(function(cmd) {
+          return cmd.name.toLowerCase().indexOf(query) >= 0;
+        });
+
+        if (acCommands.length > 0 && val.length < 20) {
+          acIndex = 0;
+          acEl.innerHTML = acCommands.map(function(cmd, i) {
+            return '<div class="cmd-ac-item' + (i === 0 ? ' active' : '') + '" data-idx="' + i + '">' +
+              '<span class="cmd-ac-name">' + cmd.name + '</span>' +
+              '<span class="cmd-ac-desc">' + cmd.desc + '</span></div>';
+          }).join('');
+          acEl.style.display = 'block';
+
+          acEl.querySelectorAll('.cmd-ac-item').forEach(function(item) {
+            item.onmousedown = function(e) {
+              e.preventDefault();
+              var idx = parseInt(this.getAttribute('data-idx'));
+              input.value = acCommands[idx].name + ' ';
+              acEl.style.display = 'none';
+              input.focus();
+            };
+          });
+        } else {
+          acEl.style.display = 'none';
+        }
+      } else {
+        acEl.style.display = 'none';
+      }
+    };
+
+    // 点击其他区域关闭补全
+    document.addEventListener('click', function(e) {
+      var acEl = $('commandAutocomplete');
+      if (acEl && !input.contains(e.target) && !acEl.contains(e.target)) {
+        acEl.style.display = 'none';
+      }
+    });
+  }
+
+  // 移除附件
+  var removeBtn = $('removeAttachment');
+  if (removeBtn) removeBtn.onclick = function() { state.attachedImage = null; $('attachmentPreview').style.display = 'none'; };
+
+  // 粘贴事件 - 只在输入框内拦截图片
+  var inputEl = $('messageInput');
+  if (inputEl) {
+    inputEl.onpaste = function(e) {
+      var items = e.clipboardData.items;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') >= 0) {
+          e.preventDefault();
+          var blob = items[i].getAsFile();
+          var reader = new FileReader();
+          var type = items[i].type;
+          reader.onload = function() { attachImage({ data: reader.result.split(',')[1], mediaType: type }); };
+          reader.readAsDataURL(blob);
+          break;
+        }
+      }
+    };
+  }
+
+  // 侧边栏标签
+  document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.onclick = function() {
+      document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+      document.querySelectorAll('.sidebar-panel').forEach(function(p) { p.classList.remove('active'); });
+      btn.classList.add('active');
+      var panel = $('panel-' + btn.getAttribute('data-tab'));
+      if (panel) panel.classList.add('active');
+    };
+  });
+
+  // 打开文件夹
+  var openFolderBtn = $('openFolderBtn');
+  if (openFolderBtn) {
+    openFolderBtn.onclick = async function() {
+      var dir = await window.api.invoke('select-folder');
+      if (dir) { state.workDir = dir; $('currentDir').textContent = dir; loadFileTree(); }
+    };
+  }
+
+  // 新建文件
+  var newFileBtn = $('newFileBtn');
+  if (newFileBtn) {
+    newFileBtn.onclick = function() {
+      if (!state.workDir) { alert('请先选择工作目录'); return; }
+      var name = prompt('新建文件名称:', '');
+      if (!name) return;
+      var fullPath = state.workDir + '\\' + name;
+      window.api.invoke('tool-write', fullPath, '').then(function(r) {
+        if (r.success) loadFileTree();
+        else alert('创建失败: ' + r.error);
+      });
+    };
+  }
+
+  // 新建文件夹
+  var newFolderBtn = $('newFolderBtn');
+  if (newFolderBtn) {
+    newFolderBtn.onclick = function() {
+      if (!state.workDir) { alert('请先选择工作目录'); return; }
+      var name = prompt('新建文件夹名称:', '');
+      if (!name) return;
+      var fullPath = state.workDir + '\\' + name;
+      window.api.invoke('tool-bash', 'mkdir "' + fullPath + '"').then(function(r) {
+        if (r.success) loadFileTree();
+        else alert('创建失败: ' + r.output);
+      });
+    };
+  }
+
+  // 全部折叠
+  var collapseAllBtn = $('collapseAllBtn');
+  if (collapseAllBtn) {
+    collapseAllBtn.onclick = function() {
+      // 将所有目录加入折叠集合，然后重绘
+      var allDirs = [];
+      function collectDirs(node, prefix) {
+        var keys = Object.keys(node).sort();
+        keys.forEach(function(key) {
+          if (node[key] !== null) {
+            var dirPath = prefix + key;
+            allDirs.push(dirPath);
+            collectDirs(node[key], dirPath + '/');
+          }
+        });
+      }
+      // 重建 root 以收集所有目录路径
+      var result = window.api.invoke('get-file-tree', state.workDir).then(function(resp) {
+        if (!resp.success || !resp.files) return;
+        var root = {};
+        resp.files.forEach(function(f) {
+          var rel = f.path.replace(state.workDir, '').replace(/\\/g, '/').replace(/^\//, '');
+          var parts = rel.split('/');
+          var current = root;
+          parts.forEach(function(part, i) {
+            if (!current[part]) current[part] = (i === parts.length - 1 && f.type === 'file') ? null : {};
+            if (current[part] !== null) current = current[part];
+          });
+        });
+        fileTreeCollapsed = new Set();
+        collectDirs(root, '');
+        allDirs.forEach(function(d) { fileTreeCollapsed.add(d); });
+        loadFileTree();
+      });
+    };
+  }
+
+  // 设置
+  var settingsBtn = $('settingsBtn');
+  if (settingsBtn) settingsBtn.onclick = function() { openSettings(); };
+  var settingsModal = $('settingsModal');
+  var closeSettings = $('closeSettings');
+  if (closeSettings) closeSettings.onclick = function() { settingsModal.style.display = 'none'; $('messageInput').focus(); };
+  // 点击遮罩关闭设置
+  if (settingsModal) settingsModal.onclick = function(e) { if (e.target === settingsModal) { settingsModal.style.display = 'none'; $('messageInput').focus(); } };
+
+  // 记忆
+  var memoryBtn = $('memoryBtn');
+  if (memoryBtn) memoryBtn.onclick = function() { openMemory(); };
+  var closeMemory = $('closeMemory');
+  if (closeMemory) closeMemory.onclick = function() { $('memoryModal').style.display = 'none'; $('messageInput').focus(); };
+  var saveMemory = $('saveMemory');
+  if (saveMemory) saveMemory.onclick = function() { saveMemoryContent(); };
+  var addMemoryBtn = $('addMemoryBtn');
+  if (addMemoryBtn) addMemoryBtn.onclick = function() { addMemory(); };
+  var memoryInput = $('memoryInput');
+  if (memoryInput) {
+    memoryInput.onkeydown = function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); addMemory(); }
+    };
+  }
+  var clearMemoryBtn = $('clearMemoryBtn');
+  if (clearMemoryBtn) clearMemoryBtn.onclick = function() { clearAllMemory(); };
+
+  // Skills
+  var addSkillBtn = $('addSkillBtn');
+  if (addSkillBtn) addSkillBtn.onclick = function() { openSkillModal(); };
+  var closeSkill = $('closeSkill');
+  if (closeSkill) closeSkill.onclick = function() { $('skillModal').style.display = 'none'; $('messageInput').focus(); };
+  var cancelSkillBtn = $('cancelSkillBtn');
+  if (cancelSkillBtn) cancelSkillBtn.onclick = function() { $('skillModal').style.display = 'none'; $('messageInput').focus(); };
+  var saveSkillBtn = $('saveSkillBtn');
+  if (saveSkillBtn) saveSkillBtn.onclick = function() { saveSkill(); };
+  var skillFileBtn = $('skillFileBtn');
+  if (skillFileBtn) skillFileBtn.onclick = function() { selectSkillFile(); };
+
+  // MCP
+  var closeMcp = $('closeMcp');
+  if (closeMcp) closeMcp.onclick = function() { $('mcpModal').style.display = 'none'; $('messageInput').focus(); };
+  var addMcpBtn = $('addMcpBtn');
+  if (addMcpBtn) addMcpBtn.onclick = function() { addMcpServer(); };
+  var testMcpBtn = $('testMcpBtn');
+  if (testMcpBtn) testMcpBtn.onclick = function() { testMcpServer(); };
+
+  // 文件编辑器
+  var editorSave = $('editorSave');
+  if (editorSave) editorSave.onclick = function() { saveCurrentFile(); };
+  var editorClose = $('editorClose');
+  if (editorClose) editorClose.onclick = function() { closeFile(state.activeFileIndex); };
+
+  // 编辑器代码区域事件
+  var editorCode = $('editorCode');
+  if (editorCode) {
+    editorCode.oninput = function() {
+      saveEditorContent();
+      updateLineNumbers();
+    };
+    editorCode.onscroll = function() {
+      var lineNums = $('editorLineNumbers');
+      if (lineNums) lineNums.scrollTop = this.scrollTop;
+    };
+    editorCode.onkeydown = function(e) {
+      // Tab 缩进
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        var start = this.selectionStart;
+        var end = this.selectionEnd;
+        this.value = this.value.substring(0, start) + '  ' + this.value.substring(end);
+        this.selectionStart = this.selectionEnd = start + 2;
+        saveEditorContent();
+        updateLineNumbers();
+      }
+    };
+  }
+
+  // 全局 Ctrl+S 保存
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      if (state.activeFileIndex >= 0) saveCurrentFile();
+    }
+    // Escape 停止生成
+    if (e.key === 'Escape' && state.isGenerating) {
+      e.preventDefault();
+      stopGeneration();
+      showToast('已停止生成');
+    }
+  });
+
+  // ========== 拖拽分隔条 ==========
+  setupResizers();
+
+  // 右键菜单
+  setupContextMenu();
+
+  // ========== 拖拽上传 ==========
+  var chatArea = $('chatArea');
+  if (chatArea) {
+    chatArea.ondragover = function(e) {
+      e.preventDefault();
+      if (!document.querySelector('.drag-overlay')) {
+        var ov = document.createElement('div');
+        ov.className = 'drag-overlay';
+        ov.textContent = '拖放文件到此处';
+        chatArea.style.position = 'relative';
+        chatArea.appendChild(ov);
+      }
+    };
+    chatArea.ondragleave = function(e) {
+      var ov = chatArea.querySelector('.drag-overlay');
+      if (ov && !chatArea.contains(e.relatedTarget)) ov.remove();
+    };
+    chatArea.ondrop = function(e) {
+      e.preventDefault();
+      var ov = chatArea.querySelector('.drag-overlay');
+      if (ov) ov.remove();
+      var files = e.dataTransfer.files;
+      if (files.length > 0) {
+        var file = files[0];
+        var reader = new FileReader();
+        reader.onload = function() {
+          var data = reader.result.split(',')[1];
+          var type = file.type || 'application/octet-stream';
+          state.attachedImage = { data: data, mediaType: type };
+          $('previewImage').src = reader.result;
+          $('attachmentPreview').style.display = 'inline-block';
+        };
+        reader.readAsDataURL(file);
+      }
+    };
+  }
+
+  // ========== 编辑器按钮 ==========
+  var editorFindBtn = $('editorFindBtn');
+  if (editorFindBtn) editorFindBtn.onclick = function() { toggleFindBar(); };
+  var findClose = $('findClose');
+  if (findClose) findClose.onclick = function() { $('findBar').style.display = 'none'; };
+  var findNext = $('findNext');
+  if (findNext) findNext.onclick = function() { findInEditor(1); };
+  var findPrev = $('findPrev');
+  if (findPrev) findPrev.onclick = function() { findInEditor(-1); };
+  var replaceOneBtn = $('replaceOneBtn');
+  if (replaceOneBtn) replaceOneBtn.onclick = function() { replaceInEditor(false); };
+  var replaceAllBtn = $('replaceAllBtn');
+  if (replaceAllBtn) replaceAllBtn.onclick = function() { replaceInEditor(true); };
+
+  var findInput = $('findInput');
+  if (findInput) {
+    findInput.oninput = function() { findInEditor(0); };
+    findInput.onkeydown = function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); findInEditor(e.shiftKey ? -1 : 1); }
+      if (e.key === 'Escape') { $('findBar').style.display = 'none'; }
+    };
+  }
+
+  // ========== Markdown 预览 / 代码视图切换 ==========
+  var codeViewBtn = $('editorCodeView');
+  var previewBtn = $('editorPreview');
+  if (codeViewBtn) codeViewBtn.onclick = function() { switchEditorView('code'); };
+  if (previewBtn) previewBtn.onclick = function() { switchEditorView('preview'); };
+
+  // ========== 导出 ==========
+  var exportBtn = $('exportBtn');
+  if (exportBtn) exportBtn.onclick = function() { exportConversation(); };
+
+  // ========== Ctrl+P 快速打开 ==========
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'p' && !e.shiftKey) {
+      // 如果在编辑器输入框内则不拦截
+      if (document.activeElement && document.activeElement.id === 'editorCode') return;
+      e.preventDefault();
+      openQuickOpen();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'E') {
+      e.preventDefault();
+      exportConversation();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f' && state.activeFileIndex >= 0) {
+      // 编辑器内 Ctrl+F
+      if (document.activeElement && document.activeElement.id === 'editorCode') {
+        e.preventDefault();
+        toggleFindBar();
+      }
+    }
+  });
+
+  // 设置标签
+  document.querySelectorAll('.stab').forEach(function(btn) {
+    btn.onclick = function() {
+      document.querySelectorAll('.stab').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      renderSettingsTab(btn.getAttribute('data-stab'));
+    };
+  });
+
+  // 权限
+  var permDeny = $('permDeny');
+  if (permDeny) permDeny.onclick = function() { respondPermission(false); };
+  var permAllow = $('permAllow');
+  if (permAllow) permAllow.onclick = function() { respondPermission(true); };
+  var permAlways = $('permAlways');
+  if (permAlways) permAlways.onclick = function() { respondPermission('always'); };
+
+  // 模型选择
+  var modelSelect = $('modelSelect');
+  if (modelSelect) {
+    modelSelect.onchange = function() {
+      state.config.defaultModel = this.value;
+      window.api.invoke('set-config', 'defaultModel', this.value);
+    };
+  }
+
+  // 流式响应（旧版兼容）
+  window.api.on('stream-chunk', function(chunk) {
+    var conv = state.currentConversation;
+    if (conv) {
+      var lastMsg = conv.messages[conv.messages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        lastMsg.content += chunk;
+        renderMessages();
+        // 流式时持续滚到底部
+        var chatArea = $('chatArea');
+        if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
+      }
+    }
+  });
+
+  // ========== Agent Loop IPC 事件 ==========
+
+  // 流式文本 — 直接追加到最后一个消息的 DOM，避免全量重绘
+  window.api.on('agent-stream-text', function(data) {
+    var conv = state.currentConversation;
+    if (!conv) return;
+    var lastMsg = conv.messages[conv.messages.length - 1];
+    if (!lastMsg || lastMsg.role !== 'assistant') return;
+
+    lastMsg.content += data.text;
+
+    // 找到最后一个 assistant 消息的 .msg-content 元素，直接追加文本
+    var messagesEl = $('messages');
+    if (!messagesEl) return;
+    var msgContents = messagesEl.querySelectorAll('.message.assistant .msg-content');
+    if (msgContents.length > 0) {
+      var contentEl = msgContents[msgContents.length - 1];
+      // 用 textNode 追加避免 HTML 解析，最后 agent-complete 时会全量美化
+      contentEl.appendChild(document.createTextNode(data.text));
+    }
+
+    var chatArea = $('chatArea');
+    if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
+  });
+
+  // 工具调用开始 — 需要重绘来展示新工具调用块
+  window.api.on('agent-stream-tool-start', function(data) {
+    var conv = state.currentConversation;
+    if (conv) {
+      var lastMsg = conv.messages[conv.messages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        if (!lastMsg.toolCalls) lastMsg.toolCalls = [];
+        lastMsg.toolCalls.push({
+          id: data.id,
+          name: data.name,
+          input: JSON.stringify(data.input, null, 2),
+          result: '',
+          status: 'running'
+        });
+        renderMessages();
+      }
+    }
+  });
+
+  // 工具调用结果 — 需要重绘来更新工具状态
+  window.api.on('agent-stream-tool-result', function(data) {
+    var conv = state.currentConversation;
+    if (conv) {
+      var lastMsg = conv.messages[conv.messages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant' && lastMsg.toolCalls) {
+        var tc = lastMsg.toolCalls.find(function(t) { return t.id === data.id; });
+        if (tc) {
+          tc.result = data.result;
+          tc.status = data.error ? 'error' : 'done';
+        }
+        renderMessages();
+      }
+    }
+  });
+
+  // Agent 循环完成
+  window.api.on('agent-complete', function(data) {
+    log('Agent loop 完成: ' + JSON.stringify(data.success));
+    state.isGenerating = false;
+    state.currentLoopId = null;
+    var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
+    if (sendBtn) sendBtn.style.display = 'flex';
+    if (stopBtn) stopBtn.style.display = 'none';
+
+    if (!data.success && data.error) {
+      var conv = state.currentConversation;
+      if (conv) {
+        var lastMsg = conv.messages[conv.messages.length - 1];
+        if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
+          lastMsg.content = '错误: ' + data.error;
+        }
+      }
+    }
+
+
+    saveConversations();
+    renderMessages();
+  });
+
+  // 自动记忆提取完成
+  window.api.on('auto-memories-extracted', function(data) {
+    if (data.memories) {
+      state.memories = data.memories;
+    }
+    if (data.newMemories && data.newMemories.length > 0) {
+      showToast('自动记忆: 已保存 ' + data.newMemories.length + ' 条新记忆');
+    }
+  });
+
+  // MCP 连接状态更新
+  window.api.on('mcp-status', function(statuses) {
+    state.mcpStatuses = statuses;
+    // 如果 MCP 管理弹窗打开着，刷新列表
+    var modal = $('mcpModal');
+    if (modal && modal.style.display === 'flex') {
+      renderMcpList();
+    }
+  });
+
+  // 权限请求
+  window.api.on('agent-permission-request', function(data) {
+    log('权限请求: ' + data.toolName);
+    showPermissionModal(data);
+  });
+
+  // ========== 点击弹窗外部关闭 ==========
+  document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) {
+        overlay.style.display = 'none';
+      }
+    });
+  });
+}
+
+// 对话管理
+function createNewConversation() {
+  var conv = { id: Date.now().toString(), title: '新对话', messages: [], createdAt: new Date().toISOString() };
+  state.conversations.unshift(conv);
+  state.currentConversation = conv;
+  saveConversations();
+  renderConversations();
+  renderMessages();
+}
+
+function selectConversation(id) {
+  for (var i = 0; i < state.conversations.length; i++) {
+    if (state.conversations[i].id === id) { state.currentConversation = state.conversations[i]; break; }
+  }
+  renderConversations();
+  renderMessages();
+}
+
+function deleteConversation(id, e) {
+  e.stopPropagation();
+  state.conversations = state.conversations.filter(function(c) { return c.id !== id; });
+  if (state.currentConversation && state.currentConversation.id === id) state.currentConversation = state.conversations[0] || null;
+  saveConversations();
+  renderConversations();
+  renderMessages();
+}
+
+function saveConversations() {
+  localStorage.setItem('conversations', JSON.stringify(state.conversations));
+}
+
+function renderConversations() {
+  var list = $('conversationList');
+  if (!list) return;
+  var html = '';
+  for (var i = 0; i < state.conversations.length; i++) {
+    var c = state.conversations[i];
+    var isActive = state.currentConversation && state.currentConversation.id === c.id;
+    html += '<div class="conversation-item' + (isActive ? ' active' : '') + '" data-id="' + c.id + '">' +
+      '<span class="title">' + esc(c.title) + '</span>' +
+      '<button class="del" data-del="' + c.id + '">X</button></div>';
+  }
+  list.innerHTML = html;
+  list.querySelectorAll('.conversation-item').forEach(function(item) {
+    item.onclick = function() { selectConversation(this.getAttribute('data-id')); };
+  });
+  list.querySelectorAll('.del').forEach(function(btn) {
+    btn.onclick = function(e) { deleteConversation(this.getAttribute('data-del'), e); };
+  });
+}
+
+// 消息渲染
+function renderMessages() {
+  var messagesEl = $('messages');
+  var welcomeEl = $('welcomeScreen');
+  if (!messagesEl || !welcomeEl) return;
+
+  if (!state.currentConversation || state.currentConversation.messages.length === 0) {
+    welcomeEl.style.display = 'flex';
+    messagesEl.innerHTML = '';
+    return;
+  }
+  welcomeEl.style.display = 'none';
+  var html = '';
+  for (var i = 0; i < state.currentConversation.messages.length; i++) {
+    var msg = state.currentConversation.messages[i];
+    var isUser = msg.role === 'user';
+    var time = new Date(msg.timestamp).toLocaleTimeString('zh-CN');
+    var content = formatContent(msg.content);
+    var imageHTML = msg.image ? '<img class="msg-image" src="data:' + msg.image.mediaType + ';base64,' + msg.image.data + '" />' : '';
+    var toolHTML = '';
+    if (msg.toolCalls && msg.toolCalls.length > 0) {
+      toolHTML = '<div class="tool-calls">';
+      for (var j = 0; j < msg.toolCalls.length; j++) {
+        var tc = msg.toolCalls[j];
+        var statusClass = tc.status === 'running' ? 'running' : (tc.status === 'error' ? 'error' : 'done');
+        var statusIcon = tc.status === 'running' ? '<div class="spinner"></div>' : (tc.status === 'error' ? '❌' : '✅');
+        var hasResult = !!tc.result;
+        toolHTML += '<div class="tool-call ' + statusClass + (hasResult ? ' expanded' : '') + '">' +
+          '<div class="tool-call-header" onclick="this.parentElement.classList.toggle(\'expanded\')">' +
+            '<span class="tool-call-icon">' + statusIcon + '</span>' +
+            '<span class="tool-call-name">' + esc(tc.name) + '</span>' +
+            '<span class="tool-call-toggle">▼</span>' +
+          '</div>' +
+          '<div class="tool-call-body">' +
+            '<div class="tool-call-input"><div class="tool-label">输入</div><pre>' + esc(tc.input) + '</pre></div>' +
+            (tc.result ? '<div class="tool-call-result"><div class="tool-label">结果</div><div class="tool-result-content">' + formatToolResult(tc.result) + '</div></div>' : '') +
+          '</div>' +
+        '</div>';
+      }
+      toolHTML += '</div>';
+    }
+    html += '<div class="message ' + msg.role + '">' +
+      '<div class="msg-header"><div class="msg-avatar">' + (isUser ? '你' : 'C') + '</div><span class="msg-role">' + (isUser ? '你' : 'Claude') + '</span><span class="msg-time">' + time + '</span></div>' +
+      '<div class="msg-content">' + content + '</div>' + toolHTML + imageHTML +
+      '<div class="msg-actions"><button class="msg-action copy-btn" data-idx="' + i + '">复制</button>' +
+      (!isUser ? '<button class="msg-action regen-btn" data-idx="' + i + '">重新生成</button>' : '') + '</div></div>';
+  }
+  messagesEl.innerHTML = html;
+  messagesEl.querySelectorAll('.copy-btn').forEach(function(btn) {
+    btn.onclick = function() {
+      var idx = parseInt(this.getAttribute('data-idx'));
+      navigator.clipboard.writeText(state.currentConversation.messages[idx].content);
+      this.textContent = '已复制'; var self = this; setTimeout(function() { self.textContent = '复制'; }, 2000);
+    };
+  });
+  messagesEl.querySelectorAll('.regen-btn').forEach(function(btn) {
+    btn.onclick = function() {
+      if (state.isGenerating) return;
+      var idx = parseInt(this.getAttribute('data-idx'));
+      state.currentConversation.messages.splice(idx);
+      saveConversations(); renderMessages(); generateResponse();
+    };
+  });
+  // 延迟滚动，等 DOM 渲染完成
+  requestAnimationFrame(function() {
+    var chatArea = $('chatArea');
+    if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
+  });
+}
+
+// 轻量级 Toast 通知
+function showToast(msg) {
+  var toast = document.createElement('div');
+  toast.className = 'toast-notification';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(function() { toast.classList.add('show'); }, 10);
+  setTimeout(function() {
+    toast.classList.remove('show');
+    setTimeout(function() { toast.remove(); }, 300);
+  }, 3000);
+}
+
+function formatContent(content) {
+  if (!content) return '';
+
+  // 先过滤 <think> 标签
+  content = content.replace(/<think>[\s\S]*?<\/think>/g, '');
+
+  // 提取代码块，避免被转义
+  var codeBlocks = [];
+  content = content.replace(/```(\w*)\n([\s\S]*?)```/g, function(match, lang, code) {
+    var idx = codeBlocks.length;
+    codeBlocks.push({ lang: lang, code: code });
+    return '\x00CODEBLOCK_' + idx + '\x00';
+  });
+
+  // 转义 HTML
+  content = esc(content);
+
+  // 还原代码块并高亮（带复制按钮）
+  content = content.replace(/\x00CODEBLOCK_(\d+)\x00/g, function(match, idx) {
+    var block = codeBlocks[parseInt(idx)];
+    var highlighted = highlightCode(block.code, block.lang);
+    var langLabel = block.lang || 'code';
+    var escapedCode = block.code.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+    return '<div class="code-block-wrapper">' +
+      '<div class="code-block-header"><span class="code-lang">' + langLabel + '</span>' +
+      '<button class="code-copy-btn" onclick="copyCodeBlock(this)" data-code="' + escapedCode + '">复制</button></div>' +
+      '<pre><code>' + highlighted + '</code></pre></div>';
+  });
+
+  // 行内代码
+  content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // 加粗
+  content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // 斜体
+  content = content.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // 链接（过滤 javascript: 协议）
+  content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, text, url) {
+    var safeUrl = url.replace(/^(javascript|data|vbscript):/i, '#');
+    return '<a href="' + safeUrl + '" target="_blank" rel="noopener">' + text + '</a>';
+  });
+  // 标题
+  content = content.replace(/^### (.+)$/gm, '<strong style="font-size:1.05em">$1</strong>');
+  content = content.replace(/^## (.+)$/gm, '<strong style="font-size:1.1em">$1</strong>');
+  content = content.replace(/^# (.+)$/gm, '<strong style="font-size:1.2em">$1</strong>');
+
+  return content;
+}
+
+// 工具结果格式化：HTML 转义 + 段落换行 + 链接识别
+function formatToolResult(text) {
+  if (!text) return '';
+  text = esc(text);
+  // 识别链接
+  text = text.replace(/(https?:\/\/[^\s<"]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  // 段落换行（双换行分段，单换行断行）
+  var parts = text.split(/\n\n+/);
+  return parts.map(function(p) { return '<p>' + p.replace(/\n/g, '<br>') + '</p>'; }).join('');
+}
+function copyCodeBlock(btn) {
+  var code = btn.getAttribute('data-code');
+  // 还原 HTML 实体
+  code = code.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  function onSuccess() {
+    btn.textContent = '已复制';
+    setTimeout(function() { btn.textContent = '复制'; }, 2000);
+  }
+  // Clipboard via preload bridge
+  try {
+    if (window.api && window.api.clipboard) { window.api.clipboard.writeText(code); onSuccess(); return; }
+  } catch(e) {}
+  // Fallback: textarea 选中复制
+  var ta = document.createElement('textarea');
+  ta.value = code;
+  ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch(e) {}
+  document.body.removeChild(ta);
+  onSuccess();
+}
+
+// 简易语法高亮
+function highlightCode(code, lang) {
+  if (!lang) return code;
+  lang = lang.toLowerCase();
+
+  var rules = [];
+  if (['js','ts','jsx','tsx','json'].indexOf(lang) >= 0) {
+    rules = [
+      { pattern: /(\/\/.*$)/gm, cls: 'hl-comment' },
+      { pattern: /(\/\*[\s\S]*?\*\/)/g, cls: 'hl-comment' },
+      { pattern: /('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`)/g, cls: 'hl-string' },
+      { pattern: /\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|this|class|extends|import|export|from|default|async|await|try|catch|throw|typeof|instanceof|in|of|null|undefined|true|false)\b/g, cls: 'hl-keyword' },
+      { pattern: /\b(\d+\.?\d*)\b/g, cls: 'hl-number' },
+      { pattern: /\b([a-zA-Z_]\w*)\s*\(/g, cls: 'hl-function' }
+    ];
+  } else if (['html','htm','xml','vue','svelte'].indexOf(lang) >= 0) {
+    rules = [
+      { pattern: /(&lt;!--[\s\S]*?--&gt;)/g, cls: 'hl-comment' },
+      { pattern: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, cls: 'hl-string' },
+      { pattern: /(&lt;\/?)([\w-]+)/g, cls: 'hl-tag', replace: '$1<span class="hl-tag">$2</span>' },
+      { pattern: /\b([\w-]+)(?==)/g, cls: 'hl-attr' }
+    ];
+  } else if (lang === 'css' || lang === 'scss') {
+    rules = [
+      { pattern: /(\/\*[\s\S]*?\*\/)/g, cls: 'hl-comment' },
+      { pattern: /('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g, cls: 'hl-string' },
+      { pattern: /(#[0-9a-fA-F]{3,8})\b/g, cls: 'hl-number' },
+      { pattern: /\b(\d+\.?\d*(px|em|rem|%|vh|vw|s|ms)?)\b/g, cls: 'hl-number' },
+      { pattern: /([.#][\w-]+)/g, cls: 'hl-function' }
+    ];
+  } else if (lang === 'python' || lang === 'py') {
+    rules = [
+      { pattern: /(#.*$)/gm, cls: 'hl-comment' },
+      { pattern: /("""[\s\S]*?"""|'''[\s\S]*?'''|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g, cls: 'hl-string' },
+      { pattern: /\b(def|class|return|if|elif|else|for|while|import|from|as|try|except|finally|raise|with|yield|lambda|pass|break|continue|True|False|None|and|or|not|in|is|self|print)\b/g, cls: 'hl-keyword' },
+      { pattern: /\b(\d+\.?\d*)\b/g, cls: 'hl-number' }
+    ];
+  } else if (lang === 'sh' || lang === 'bash' || lang === 'shell') {
+    rules = [
+      { pattern: /(#.*$)/gm, cls: 'hl-comment' },
+      { pattern: /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, cls: 'hl-string' },
+      { pattern: /\b(if|then|else|elif|fi|for|do|done|while|until|case|esac|function|return|exit|echo|cd|ls|mkdir|rm|cp|mv|cat|grep|sed|awk|chmod|chown|sudo|apt|npm|yarn|pip)\b/g, cls: 'hl-keyword' }
+    ];
+  } else if (lang === 'sql') {
+    rules = [
+      { pattern: /(--.*$)/gm, cls: 'hl-comment' },
+      { pattern: /('(?:[^'\\]|\\.)*')/g, cls: 'hl-string' },
+      { pattern: /\b(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|DROP|ALTER|TABLE|INDEX|JOIN|LEFT|RIGHT|INNER|ON|AND|OR|NOT|IN|LIKE|BETWEEN|IS|NULL|GROUP|BY|ORDER|ASC|DESC|LIMIT|OFFSET|HAVING|AS|DISTINCT|COUNT|SUM|AVG|MIN|MAX|UNION|ALL)\b/gi, cls: 'hl-keyword' }
+    ];
+  } else {
+    return code;
+  }
+
+  // 简单的顺序替换高亮（非嵌套，避免冲突）
+  var result = code;
+  for (var i = rules.length - 1; i >= 0; i--) {
+    var r = rules[i];
+    if (r.replace) {
+      result = result.replace(r.pattern, r.replace);
+    } else {
+      result = result.replace(r.pattern, '<span class="' + r.cls + '">$1</span>');
+    }
+  }
+  return result;
+}
+
+// 发送消息
+async function sendMessage() {
+  var input = $('messageInput');
+  if (!input) return;
+
+  var content = input.value.trim();
+  if (!content && !state.attachedImage) return;
+  if (state.isGenerating) return;
+
+  if (!state.currentConversation) createNewConversation();
+
+  // 斜杠命令
+  if (content.startsWith('/')) {
+    handleSlashCommand(content);
+    input.value = '';
+    return;
+  }
+
+  // 检测 URL，后台尝试 MCP 配置（不阻塞发送）
+  var urlMatch = content.match(/^(https?:\/\/[^\s]+)$/);
+  if (urlMatch) {
+    tryMcpFromUrl(urlMatch[1]);
+  }
+
+  var userMsg = {
+    role: 'user',
+    content: content,
+    image: state.attachedImage,
+    timestamp: new Date().toISOString()
+  };
+  state.currentConversation.messages.push(userMsg);
+  if (state.currentConversation.messages.length === 1) state.currentConversation.title = content.substring(0, 30) || '图片对话';
+  saveConversations(); renderConversations(); renderMessages();
+  input.value = ''; input.style.height = 'auto';
+  state.attachedImage = null; $('attachmentPreview').style.display = 'none';
+
+  await generateResponse();
+}
+
+// AI 生成（使用 Agent Loop）
+async function generateResponse() {
+  state.isGenerating = true;
+  var sendBtn = $('sendBtn');
+  var stopBtn = $('stopBtn');
+  if (sendBtn) sendBtn.style.display = 'none';
+  if (stopBtn) stopBtn.style.display = 'flex';
+  else logError('stopBtn not found in DOM');
+  var assistantMsg = { role: 'assistant', content: '', toolCalls: [], timestamp: new Date().toISOString() };
+  state.currentConversation.messages.push(assistantMsg);
+  renderMessages();
+
+  // 构建 Anthropic 格式消息
+  var apiMessages = buildApiMessages();
+
+  // 获取模型配置
+  var selectedModelId = state.config.defaultModel;
+  var modelConfig = null;
+  for (var j = 0; j < state.models.length; j++) {
+    if (state.models[j].id === selectedModelId) {
+      modelConfig = state.models[j];
+      break;
+    }
+  }
+
+  // 生成唯一的 loop ID
+  var loopId = 'loop_' + Date.now();
+  state.currentLoopId = loopId;
+
+  var apiOptions = {
+    loopId: loopId,
+    messages: apiMessages,
+    workDir: state.workDir
+  };
+
+  if (modelConfig) {
+    if (modelConfig.endpoint) apiOptions.endpoint = modelConfig.endpoint;
+    if (modelConfig.apiKey) apiOptions.apiKey = modelConfig.apiKey;
+    apiOptions.model = modelConfig.id;
+  }
+
+  try {
+    // 启动 agent loop（异步，通过 IPC 事件接收结果）
+    window.api.invoke('agent-start', apiOptions).then(function(result) {
+      log('Agent loop 返回: ' + JSON.stringify(result.success));
+    }).catch(function(err) {
+      logError('Agent loop 失败: ' + err.message);
+      state.isGenerating = false;
+      var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
+      if (sendBtn) sendBtn.style.display = 'flex';
+      if (stopBtn) stopBtn.style.display = 'none';
+    });
+  } catch (err) {
+    assistantMsg.content = '错误: ' + err.message;
+    state.isGenerating = false;
+    var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
+    if (sendBtn) sendBtn.style.display = 'flex';
+    if (stopBtn) stopBtn.style.display = 'none';
+    saveConversations();
+    renderMessages();
+  }
+}
+
+// 停止生成
+function stopGeneration() {
+  if (state.currentLoopId) {
+    window.api.invoke('agent-cancel', state.currentLoopId);
+    state.currentLoopId = null;
+  }
+  state.isGenerating = false;
+  var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
+  if (sendBtn) sendBtn.style.display = 'flex';
+  if (stopBtn) stopBtn.style.display = 'none';
+}
+
+// 构建 Anthropic 格式消息
+function buildApiMessages() {
+  var messages = [];
+  for (var i = 0; i < state.currentConversation.messages.length; i++) {
+    var m = state.currentConversation.messages[i];
+    if (m.role === 'user') {
+      var content = [];
+      if (m.image) {
+        content.push({
+          type: 'image',
+          source: { type: 'base64', media_type: m.image.mediaType, data: m.image.data }
+        });
+      }
+      if (m.content) {
+        content.push({ type: 'text', text: m.content });
+      }
+      messages.push({ role: 'user', content: content });
+    } else if (m.role === 'assistant') {
+      var assistantContent = [];
+      if (m.content) {
+        assistantContent.push({ type: 'text', text: m.content });
+      }
+      if (m.toolCalls && m.toolCalls.length > 0) {
+        for (var j = 0; j < m.toolCalls.length; j++) {
+          var tc = m.toolCalls[j];
+          var input = {};
+          try { input = JSON.parse(tc.input); } catch (e) { input = { raw: tc.input }; }
+          assistantContent.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.name,
+            input: input
+          });
+        }
+      }
+      if (assistantContent.length > 0) {
+        messages.push({ role: 'assistant', content: assistantContent });
+      }
+    }
+  }
+  return messages;
+}
+
+// 执行工具
+async function executeTool(name, input) {
+  try {
+    switch (name) {
+      case 'Read':
+        var r = await window.api.invoke('tool-read', input.file_path);
+        return r.success ? r.content : '错误: ' + r.error;
+      case 'Write':
+        var w = await window.api.invoke('tool-write', input.file_path, input.content);
+        return w.success ? '文件已写入: ' + input.file_path : '错误: ' + w.error;
+      case 'Edit':
+        var e = await window.api.invoke('tool-edit', input.file_path, input.old_string, input.new_string);
+        return e.success ? '文件已编辑: ' + input.file_path : '错误: ' + e.error;
+      case 'Glob':
+        var g = await window.api.invoke('tool-glob', input.pattern);
+        return g.success ? '找到文件:\n' + g.files.join('\n') : '错误: ' + g.error;
+      case 'Grep':
+        var gr = await window.api.invoke('tool-grep', input.pattern);
+        if (!gr.success) return '错误: ' + gr.error;
+        return gr.results.length > 0
+          ? gr.results.map(function(r) { return r.file + ':' + r.line + ': ' + r.content; }).join('\n')
+          : '未找到匹配内容';
+      case 'Bash':
+        var b = await window.api.invoke('tool-bash', input.command);
+        return b.success ? b.output : '错误: ' + b.output;
+      case 'ListDirectory':
+        var ld = await window.api.invoke('tool-list-dir', input.path);
+        if (!ld.success) return '错误: ' + ld.error;
+        return ld.items.map(function(i) { return (i.type === 'directory' ? '📁 ' : '📄 ') + i.name; }).join('\n');
+      default:
+        return '未知工具: ' + name;
+    }
+  } catch (err) {
+    return '工具执行异常: ' + err.message;
+  }
+}
+
+function getSystemPrompt() {
+  var useTools = $('useTools') && $('useTools').checked;
+  var memText = state.memories.length > 0 ? '\n\n项目记忆:\n' + state.memories.map(function(m) { return '- ' + m.content; }).join('\n') : '';
+  var skillText = '';
+  if (state.currentConversation) {
+    var msgs = state.currentConversation.messages;
+    for (var i = 0; i < msgs.length; i++) {
+      if (msgs[i].role === 'user' && msgs[i].content) {
+        var match = msgs[i].content.match(/^\/skill\s+(\S+)/);
+        if (match) {
+          var skill = state.skills.find(function(s) { return s.name === match[1]; });
+          if (skill) skillText += '\n\nSkill "' + skill.name + '":\n' + skill.content;
+        }
+      }
+    }
+  }
+
+  var prompt = '你是 Claude Code，一个强大的AI编程助手。工作目录: ' + (state.workDir || '未设置') + '\n请用中文回答。';
+
+  if (useTools) {
+    prompt += '\n\n## 可用工具\n\n你可以通过以下格式调用工具（每次只调用一个工具）:\n\n```tool\n工具名\n参数名: 参数值\n```\n\n支持的工具:\n\n### Read - 读取文件\n```tool\nRead\nfile_path: /path/to/file\n```\n\n### Write - 写入文件\n```tool\nWrite\nfile_path: /path/to/file\ncontent: 文件内容\n```\n\n### Edit - 编辑文件\n```tool\nEdit\nfile_path: /path/to/file\nold_string: 要替换的文本\nnew_string: 替换后的文本\n```\n\n### Glob - 搜索文件\n```tool\nGlob\npattern: *.js\n```\n\n### Grep - 搜索内容\n```tool\nGrep\npattern: 正则表达式\n```\n\n### Bash - 执行命令\n```tool\nBash\ncommand: ls -la\n```\n\n### ListDirectory - 列出目录\n```tool\nListDirectory\npath: /path/to/dir\n```\n\n重要: 当你需要操作文件或执行命令时，请使用上述工具格式。工具调用会自动执行并返回结果给你。';
+  }
+
+  return prompt + memText + skillText;
+}
+
+// 权限（Agent Loop 版本）
+var currentPermissionData = null;
+function showPermissionModal(data) {
+  currentPermissionData = data;
+  $('permissionDesc').textContent = '允许执行 ' + data.toolName + '？';
+  $('permissionInput').innerHTML = '<pre style="background:var(--bg-primary);padding:8px;border-radius:4px;font-size:12px;overflow:auto;max-height:150px">' + JSON.stringify(data.input, null, 2) + '</pre>';
+  $('permissionModal').style.display = 'flex';
+}
+function respondPermission(value) {
+  $('permissionModal').style.display = 'none';
+  if (currentPermissionData) {
+    var permitted = value === 'always' || value === true;
+    window.api.send('agent-permission-response', currentPermissionData.requestId, permitted);
+    currentPermissionData = null;
+  }
+}
+
+// 斜杠命令
+function updateAcHighlight(acEl, idx) {
+  var items = acEl.querySelectorAll('.cmd-ac-item');
+  items.forEach(function(item, i) {
+    item.classList.toggle('active', i === idx);
+  });
+}
+
+function handleSlashCommand(cmd) {
+  var parts = cmd.split(' ');
+  var command = parts[0].toLowerCase();
+  var args = parts.slice(1).join(' ');
+  switch (command) {
+    case '/help':
+      var helpText = '可用命令:\n';
+      SLASH_COMMANDS.forEach(function(cmd) {
+        helpText += cmd.name + ' - ' + cmd.desc + '\n';
+      });
+      addAssistantMsg(helpText);
+      break;
+    case '/clear':
+      if (state.currentConversation) state.currentConversation.messages = [];
+      saveConversations(); renderMessages();
+      break;
+    case '/compact':
+      compactConversation();
+      break;
+    case '/config': openSettings(); break;
+    case '/cost':
+      addAssistantMsg('Token 统计功能已移除。Token 消耗取决于模型和对话长度。');
+      break;
+    case '/model':
+      if (args) {
+        state.config.defaultModel = args;
+        window.api.invoke('set-config', 'defaultModel', args);
+        var ms = $('modelSelect'); if (ms) ms.value = args;
+        addAssistantMsg('已切换: ' + args);
+      } else {
+        addAssistantMsg('当前: ' + state.config.defaultModel + '\n可用:\n' + state.models.map(function(m) { return '- ' + m.name + ' (' + m.id + ')'; }).join('\n'));
+      }
+      break;
+    case '/memory':
+      if (args) {
+        state.memories.push({ content: args, source: 'manual', createdAt: Date.now() });
+        window.api.invoke('save-memory', { memories: state.memories });
+        addAssistantMsg('已记住: ' + args);
+      } else {
+        openMemory();
+      }
+      break;
+    case '/skill':
+      if (args) {
+        var skill = state.skills.find(function(s) { return s.name === args; });
+        if (skill) {
+          addAssistantMsg('已引用 Skill: ' + skill.name + '\n\n' + skill.content);
+        } else {
+          addAssistantMsg('未找到 Skill: ' + args + '\n可用: ' + state.skills.map(function(s) { return s.name; }).join(', '));
+        }
+      } else {
+        addAssistantMsg('可用 Skills:\n' + (state.skills.length > 0 ? state.skills.map(function(s) { return '- ' + s.name + ': ' + s.desc; }).join('\n') : '暂无 Skill，使用 /mcp 或在侧边栏添加'));
+      }
+      break;
+    case '/mcp': openMcpModal(); break;
+    case '/workdir':
+      if (args) {
+        state.workDir = args;
+        window.api.invoke('set-work-dir', args);
+        addAssistantMsg('工作目录已设置: ' + args);
+      } else {
+        addAssistantMsg('当前工作目录: ' + (state.workDir || '未设置'));
+      }
+      break;
+    case '/theme': toggleTheme(); addAssistantMsg('已切换为' + (state.theme === 'dark' ? '深色' : '浅色') + '主题'); break;
+    case '/tools':
+      addAssistantMsg('可用工具:\n' + state.allowedTools.map(function(t) { return '- ' + t; }).join('\n'));
+      break;
+    case '/permissions':
+      addAssistantMsg('当前权限:\n' + state.allowedTools.map(function(t) { return '- ' + t + ': 允许'; }).join('\n') + '\n\n如需修改，请在设置 > 通用设置中调整');
+      break;
+    case '/init':
+      addAssistantMsg('初始化 CLAUDE.md:\n请在工作目录中创建 CLAUDE.md 文件来存储项目级指令。\n当前工作目录: ' + (state.workDir || '未设置'));
+      break;
+    case '/export':
+      if (state.currentConversation && state.currentConversation.messages.length > 0) {
+        var exportText = state.currentConversation.messages.map(function(m) {
+          return (m.role === 'user' ? '【用户】' : '【Claude】') + '\n' + m.content;
+        }).join('\n\n---\n\n');
+        navigator.clipboard.writeText(exportText);
+        addAssistantMsg('对话已复制到剪贴板 (' + state.currentConversation.messages.length + ' 条消息)');
+      } else {
+        addAssistantMsg('当前没有对话内容');
+      }
+      break;
+    default: addAssistantMsg('未知命令: ' + command + '\n输入 /help 查看所有可用命令');
+  }
+}
+
+// AI 压缩对话
+async function compactConversation() {
+  if (!state.currentConversation || state.currentConversation.messages.length < 4) {
+    addAssistantMsg('消息数量不足（至少需要4条），无需压缩');
+    return;
+  }
+
+  var msgs = state.currentConversation.messages;
+  var msgsToSummarize = msgs.slice(0, -2);
+  var recentMsgs = msgs.slice(-2);
+
+  // 构建摘要请求
+  var summaryContent = msgsToSummarize.map(function(m) {
+    return (m.role === 'user' ? '用户' : '助手') + ': ' + (m.content || '').substring(0, 500);
+  }).join('\n');
+
+  var summarizePrompt = '请将以下对话压缩成简洁的摘要，保留关键信息、决策和上下文。摘要应该：\n' +
+    '1. 保留用户的主要需求和目标\n' +
+    '2. 保留已做出的关键决策\n' +
+    '3. 保留重要的代码修改或文件操作\n' +
+    '4. 保留未解决的问题\n' +
+    '5. 控制在200字以内\n\n' +
+    '对话内容：\n' + summaryContent;
+
+  addAssistantMsg('正在压缩对话...');
+
+  try {
+    var result = await window.api.invoke('claude-api-stream', [
+      { role: 'user', content: [{ type: 'text', text: summarizePrompt }] }
+    ], {
+      model: state.config.defaultModel,
+      maxTokens: 500,
+      temperature: 0.3
+    });
+
+    if (result.success && result.content) {
+      // 替换消息为压缩后的摘要 + 最近的消息
+      state.currentConversation.messages = [
+        { role: 'user', content: '[对话已被压缩]', timestamp: new Date().toISOString() },
+        { role: 'assistant', content: '对话摘要：\n' + result.content, timestamp: new Date().toISOString() },
+        ...recentMsgs
+      ];
+      saveConversations();
+      renderMessages();
+      addAssistantMsg('对话已压缩完成。保留了最近2条消息和历史摘要。');
+    } else {
+      addAssistantMsg('压缩失败: ' + (result.error || '未知错误'));
+    }
+  } catch (err) {
+    addAssistantMsg('压缩失败: ' + err.message);
+  }
+}
+
+function addAssistantMsg(content) {
+  if (!state.currentConversation) createNewConversation();
+  state.currentConversation.messages.push({ role: 'assistant', content: content, timestamp: new Date().toISOString() });
+  saveConversations(); renderMessages();
+}
+
+// 图片
+async function uploadImage() { var image = await window.api.invoke('read-image'); if (image) attachImage(image); }
+function attachImage(image) {
+  state.attachedImage = image;
+  $('previewImage').src = 'data:' + image.mediaType + ';base64,' + image.data;
+  $('attachmentPreview').style.display = 'block';
+}
+
+// 文件树 - 可折叠
+var fileTreeCollapsed = new Set(); // 已折叠的目录路径集合 (默认展开，用户可折叠)
+
+async function loadFileTree() {
+  if (!state.workDir) return;
+  var result = await window.api.invoke('get-file-tree', state.workDir);
+  if (!result.success || !result.files) return;
+
+  var files = result.files;
+  var tree = $('fileTree');
+  if (!tree) return;
+
+  // 构建树结构
+  var root = {};
+  files.forEach(function(f) {
+    var rel = f.path.replace(state.workDir, '').replace(/\\/g, '/').replace(/^\//, '');
+    var parts = rel.split('/');
+    var current = root;
+    parts.forEach(function(part, i) {
+      if (!current[part]) {
+        current[part] = i === parts.length - 1 && f.type === 'file' ? null : {};
+      }
+      if (current[part] !== null) current = current[part];
+    });
+  });
+
+  function getFileIcon(name) {
+    var ext = name.split('.').pop().toLowerCase();
+    var icons = {
+      js: '📜', ts: '📘', jsx: '⚛', tsx: '⚛', py: '🐍', java: '☕',
+      html: '🌐', css: '🎨', json: '📋', md: '📝', txt: '📄',
+      png: '🖼', jpg: '🖼', gif: '🖼', svg: '🖼',
+      zip: '📦', tar: '📦', gz: '📦',
+      sh: '⚙', bat: '⚙', cmd: '⚙'
+    };
+    return icons[ext] || '📄';
+  }
+
+  // 递归渲染树节点，在目录名上附加折叠控制
+  function renderNode(node, prefix, depth) {
+    var html = '';
+    var keys = Object.keys(node).sort(function(a, b) {
+      var aIsDir = node[a] !== null;
+      var bIsDir = node[b] !== null;
+      if (aIsDir && !bIsDir) return -1;
+      if (!aIsDir && bIsDir) return 1;
+      return a.localeCompare(b);
+    });
+
+    keys.forEach(function(key) {
+      var isDir = node[key] !== null;
+      var indent = depth * 16;
+      if (isDir) {
+        var dirPath = prefix + key;
+        var collapsed = fileTreeCollapsed.has(dirPath);
+        var arrow = collapsed ? '▶' : '▼';
+        html += '<div class="file-item file-dir' + (collapsed ? ' collapsed' : '') + '" style="padding-left:' + (4 + indent) + 'px" data-dir="' + dirPath + '">' +
+          '<span class="dir-arrow">' + arrow + '</span>' +
+          '<span class="file-icon">📁</span><span class="file-name">' + esc(key) + '</span></div>';
+        if (!collapsed) {
+          html += renderNode(node[key], dirPath + '/', depth + 1);
+        }
+      } else {
+        html += '<div class="file-item file-file" style="padding-left:' + (4 + indent + 16) + 'px" data-path="' + prefix + key + '">' +
+          '<span class="file-icon">' + getFileIcon(key) + '</span><span class="file-name">' + esc(key) + '</span></div>';
+      }
+    });
+    return html;
+  }
+
+  var treeHtml = '<div class="file-root" style="padding:6px 8px;font-size:11px;color:var(--text-secondary);border-bottom:1px solid var(--border)">' +
+    esc(state.workDir.split(/[\\/]/).pop()) + '</div>';
+  treeHtml += renderNode(root, '', 0);
+  treeHtml += '<div style="padding:8px;font-size:11px;color:var(--text-secondary)">' + files.length + ' 个文件</div>';
+  tree.innerHTML = treeHtml;
+
+  // 目录点击 - 切换折叠
+  tree.querySelectorAll('.file-dir').forEach(function(item) {
+    item.onclick = function(e) {
+      var dirPath = this.getAttribute('data-dir');
+      if (fileTreeCollapsed.has(dirPath)) {
+        fileTreeCollapsed.delete(dirPath);
+      } else {
+        fileTreeCollapsed.add(dirPath);
+      }
+      // 重新渲染树
+      loadFileTree();
+    };
+  });
+
+  // 文件点击 - 在编辑器中打开
+  tree.querySelectorAll('.file-file').forEach(function(item) {
+    item.onclick = function() {
+      var relPath = this.getAttribute('data-path');
+      var fullPath = state.workDir + '\\' + relPath.replace(/\//g, '\\');
+      openFileInEditor(fullPath, relPath.split('/').pop());
+    };
+  });
+
+  // 右键菜单
+  tree.querySelectorAll('.file-file, .file-dir').forEach(function(item) {
+    item.oncontextmenu = function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var isDir = this.classList.contains('file-dir');
+      var relPath = this.getAttribute('data-dir') || this.getAttribute('data-path');
+      var fullPath = state.workDir + '\\' + relPath.replace(/\//g, '\\');
+      var name = relPath.split('/').pop();
+      showContextMenu(e.clientX, e.clientY, fullPath, name, isDir);
+    };
+  });
+}
+
+// ========== 右键菜单 ==========
+
+var ctxTarget = { path: '', name: '', isDir: false };
+
+function showContextMenu(x, y, fullPath, name, isDir) {
+  ctxTarget = { path: fullPath, name: name, isDir: isDir };
+  var menu = $('contextMenu');
+  if (!menu) return;
+
+  // 目录时不显示"打开"
+  menu.querySelector('[data-action="open"]').style.display = isDir ? 'none' : '';
+  // 新建文件/文件夹仅对目录显示（或在空白处，但这里默认使用当前目录）
+  menu.querySelector('[data-action="newFile"]').style.display = isDir ? '' : 'none';
+  menu.querySelector('[data-action="newFolder"]').style.display = isDir ? '' : 'none';
+  menu.querySelector('[data-action="rename"]').style.display = '';
+
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.style.display = 'block';
+
+  // 确保不超出屏幕
+  var rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = (x - rect.width) + 'px';
+  if (rect.bottom > window.innerHeight) menu.style.top = (y - rect.height) + 'px';
+}
+
+function hideContextMenu() {
+  var menu = $('contextMenu');
+  if (menu) menu.style.display = 'none';
+}
+
+function setupContextMenu() {
+  // 点击菜单项
+  var menu = $('contextMenu');
+  if (menu) {
+    menu.querySelectorAll('.ctx-item').forEach(function(item) {
+      item.onclick = function() {
+        var action = this.getAttribute('data-action');
+        handleContextAction(action);
+        hideContextMenu();
+      };
+    });
+  }
+
+  // 点击其他地方关闭菜单
+  document.addEventListener('click', function(e) {
+    var menu = $('contextMenu');
+    if (menu && !menu.contains(e.target)) hideContextMenu();
+  });
+  document.addEventListener('contextmenu', function(e) {
+    // 如果不是在文件树内右键，关闭菜单
+    if (!e.target.closest('.file-tree')) hideContextMenu();
+  });
+}
+
+async function handleContextAction(action) {
+  var p = ctxTarget.path;
+  var n = ctxTarget.name;
+
+  switch (action) {
+    case 'open':
+      openFileInEditor(p, n);
+      break;
+
+    case 'copyPath':
+      navigator.clipboard.writeText(p);
+      break;
+
+    case 'copyName':
+      navigator.clipboard.writeText(n);
+      break;
+
+    case 'rename':
+      var newName = prompt('重命名 "' + n + '" 为:', n);
+      if (newName && newName !== n) {
+        var dir = p.substring(0, p.lastIndexOf('\\'));
+        var newPath = dir + '\\' + newName;
+        // 读取旧文件 → 写入新文件 → 删除旧文件
+        var readResult = await window.api.invoke('tool-read', p);
+        if (readResult.success) {
+          var writeResult = await window.api.invoke('tool-write', newPath, readResult.content);
+          if (writeResult.success) {
+            // 用 bash 删除旧文件
+            await window.api.invoke('tool-bash', 'del "' + p + '"');
+            loadFileTree();
+          } else {
+            alert('重命名失败: ' + writeResult.error);
+          }
+        }
+      }
+      break;
+
+    case 'delete':
+      if (confirm('确定要删除 "' + n + '" 吗？此操作不可撤销。')) {
+        var cmd = ctxTarget.isDir ? 'rmdir /s /q "' + p + '"' : 'del "' + p + '"';
+        var result = await window.api.invoke('tool-bash', cmd);
+        if (result.success) {
+          // 关闭已打开的该文件
+          for (var i = state.openFiles.length - 1; i >= 0; i--) {
+            if (state.openFiles[i].path === p) closeFile(i);
+          }
+          loadFileTree();
+        } else {
+          alert('删除失败: ' + result.output);
+        }
+      }
+      break;
+
+    case 'newFile':
+      var newFileName = prompt('新建文件名称:', '');
+      if (newFileName) {
+        var dirPath = ctxTarget.isDir ? p : p.substring(0, p.lastIndexOf('\\'));
+        var newFilePath = dirPath + '\\' + newFileName;
+        var writeResult = await window.api.invoke('tool-write', newFilePath, '');
+        if (writeResult.success) {
+          loadFileTree();
+        } else {
+          alert('创建文件失败: ' + writeResult.error);
+        }
+      }
+      break;
+
+    case 'newFolder':
+      var newFolderName = prompt('新建文件夹名称:', '');
+      if (newFolderName) {
+        var parentDir = ctxTarget.isDir ? p : p.substring(0, p.lastIndexOf('\\'));
+        var newDirPath = parentDir + '\\' + newFolderName;
+        var result = await window.api.invoke('tool-bash', 'mkdir "' + newDirPath + '"');
+        if (result.success) {
+          loadFileTree();
+        } else {
+          alert('创建文件夹失败: ' + result.output);
+        }
+      }
+      break;
+
+    case 'refresh':
+      loadFileTree();
+      break;
+  }
+}
+
+// ========== 文件编辑器 ==========
+
+// 可编辑的文件扩展名
+var TEXT_EXTS = ['js','ts','jsx','tsx','py','java','html','htm','css','scss','less','json','md','txt','xml','yaml','yml','toml','ini','cfg','conf','sh','bat','cmd','ps1','sql','r','go','rs','c','cpp','h','hpp','cs','rb','php','swift','kt','scala','vue','svelte','astro','env','gitignore','dockerignore','editorconfig','prettierrc','eslintrc'];
+
+function isTextFile(name) {
+  var ext = name.split('.').pop().toLowerCase();
+  return TEXT_EXTS.indexOf(ext) >= 0;
+}
+
+async function openFileInEditor(fullPath, fileName) {
+  // 检查是否已打开
+  for (var i = 0; i < state.openFiles.length; i++) {
+    if (state.openFiles[i].path === fullPath) {
+      switchToFile(i);
+      return;
+    }
+  }
+
+  // 读取文件内容
+  var result = await window.api.invoke('tool-read', fullPath);
+  if (!result.success) {
+    alert('无法读取文件: ' + result.error);
+    return;
+  }
+
+  var isText = isTextFile(fileName);
+  state.openFiles.push({
+    name: fileName,
+    path: fullPath,
+    content: result.content,
+    originalContent: result.content,
+    modified: false,
+    isText: isText
+  });
+  state.activeFileIndex = state.openFiles.length - 1;
+
+  renderEditorTabs();
+  renderEditorContent();
+  showEditor();
+}
+
+function switchToFile(index) {
+  // 保存当前编辑器内容
+  saveEditorContent();
+  state.activeFileIndex = index;
+  renderEditorTabs();
+  renderEditorContent();
+}
+
+function closeFile(index) {
+  var file = state.openFiles[index];
+  if (file.modified) {
+    if (!confirm('文件 "' + file.name + '" 已修改，是否保存？')) {
+      // 不保存，直接关闭
+    } else {
+      saveFileByIndex(index);
+    }
+  }
+  state.openFiles.splice(index, 1);
+  if (state.activeFileIndex >= state.openFiles.length) {
+    state.activeFileIndex = state.openFiles.length - 1;
+  }
+  if (state.openFiles.length === 0) {
+    state.activeFileIndex = -1;
+    hideEditor();
+  } else {
+    renderEditorTabs();
+    renderEditorContent();
+  }
+}
+
+function saveEditorContent() {
+  if (state.activeFileIndex < 0) return;
+  var file = state.openFiles[state.activeFileIndex];
+  if (!file || !file.isText) return;
+  var editor = $('editorCode');
+  if (editor) {
+    file.content = editor.value;
+    file.modified = file.content !== file.originalContent;
+    renderEditorTabs();
+  }
+}
+
+async function saveFileByIndex(index) {
+  var file = state.openFiles[index];
+  if (!file) return;
+  var result = await window.api.invoke('tool-write', file.path, file.content);
+  if (result.success) {
+    file.originalContent = file.content;
+    file.modified = false;
+    renderEditorTabs();
+  } else {
+    alert('保存失败: ' + result.error);
+  }
+}
+
+async function saveCurrentFile() {
+  saveEditorContent();
+  await saveFileByIndex(state.activeFileIndex);
+}
+
+function renderEditorTabs() {
+  var tabsEl = $('editorTabs');
+  if (!tabsEl) return;
+  var html = '';
+  for (var i = 0; i < state.openFiles.length; i++) {
+    var f = state.openFiles[i];
+    var cls = 'editor-tab' + (i === state.activeFileIndex ? ' active' : '') + (f.modified ? ' modified' : '');
+    html += '<div class="' + cls + '" data-idx="' + i + '">' +
+      '<span class="tab-name">' + esc(f.name) + '</span>' +
+      '<button class="tab-close" data-idx="' + i + '">✕</button></div>';
+  }
+  tabsEl.innerHTML = html;
+
+  // 绑定事件
+  tabsEl.querySelectorAll('.editor-tab').forEach(function(tab) {
+    tab.onclick = function(e) {
+      if (e.target.classList.contains('tab-close')) return;
+      switchToFile(parseInt(this.getAttribute('data-idx')));
+    };
+  });
+  tabsEl.querySelectorAll('.tab-close').forEach(function(btn) {
+    btn.onclick = function(e) {
+      e.stopPropagation();
+      closeFile(parseInt(this.getAttribute('data-idx')));
+    };
+  });
+}
+
+function renderEditorContent() {
+  var file = state.activeFileIndex >= 0 ? state.openFiles[state.activeFileIndex] : null;
+  var filepath = $('editorFilepath');
+  var codeEl = $('editorCode');
+  var lineNums = $('editorLineNumbers');
+
+  if (!file) return;
+
+  if (filepath) filepath.textContent = file.path;
+  if (codeEl) {
+    codeEl.value = file.content;
+    codeEl.readOnly = !file.isText;
+  }
+
+  // 行号
+  updateLineNumbers();
+
+  // 标记修改状态
+  var tab = document.querySelector('.editor-tab.active');
+  if (tab) {
+    if (file.modified) tab.classList.add('modified');
+    else tab.classList.remove('modified');
+  }
+}
+
+function updateLineNumbers() {
+  var codeEl = $('editorCode');
+  var lineNums = $('editorLineNumbers');
+  if (!codeEl || !lineNums) return;
+  var lines = codeEl.value.split('\n').length;
+  var html = '';
+  for (var i = 1; i <= lines; i++) {
+    html += i + '\n';
+  }
+  lineNums.textContent = html;
+}
+
+function showEditor() {
+  var mainContent = document.querySelector('.main-content');
+  var editorPanel = $('editorPanel');
+  if (mainContent) mainContent.classList.add('editor-open');
+  if (editorPanel) editorPanel.style.display = 'flex';
+}
+
+function hideEditor() {
+  var mainContent = document.querySelector('.main-content');
+  var editorPanel = $('editorPanel');
+  if (mainContent) mainContent.classList.remove('editor-open');
+  if (editorPanel) editorPanel.style.display = 'none';
+}
+
+// ========== 编辑器查找替换 ==========
+
+var findState = { matches: [], current: -1 };
+
+function toggleFindBar() {
+  var bar = $('findBar');
+  if (!bar) return;
+  if (bar.style.display === 'none' || !bar.style.display) {
+    bar.style.display = 'flex';
+    var input = $('findInput');
+    if (input) {
+      // 如果编辑器有选中文本，填入查找框
+      var editor = $('editorCode');
+      if (editor && editor.selectionStart !== editor.selectionEnd) {
+        input.value = editor.value.substring(editor.selectionStart, editor.selectionEnd);
+      }
+      input.focus();
+      findInEditor(0);
+    }
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function findInEditor(direction) {
+  var query = $('findInput')?.value;
+  var editor = $('editorCode');
+  var info = $('findInfo');
+  if (!query || !editor) { findState = { matches: [], current: -1 }; if (info) info.textContent = ''; return; }
+
+  var text = editor.value;
+  findState.matches = [];
+  var idx = 0;
+  while ((idx = text.indexOf(query, idx)) !== -1) {
+    findState.matches.push(idx);
+    idx += query.length;
+  }
+
+  if (findState.matches.length === 0) {
+    findState.current = -1;
+    if (info) info.textContent = '无结果';
+    return;
+  }
+
+  if (direction !== 0) {
+    findState.current = (findState.current + direction + findState.matches.length) % findState.matches.length;
+  } else if (findState.current < 0) {
+    findState.current = 0;
+  }
+
+  var pos = findState.matches[findState.current];
+  editor.focus();
+  editor.setSelectionRange(pos, pos + query.length);
+  if (info) info.textContent = (findState.current + 1) + ' / ' + findState.matches.length;
+}
+
+function replaceInEditor(replaceAll) {
+  var query = $('findInput')?.value;
+  var replacement = $('replaceInput')?.value;
+  var editor = $('editorCode');
+  if (!query || !editor) return;
+
+  if (replaceAll) {
+    editor.value = editor.value.split(query).join(replacement);
+    saveEditorContent();
+    updateLineNumbers();
+    findInEditor(0);
+  } else {
+    var pos = findState.matches[findState.current];
+    if (pos !== undefined) {
+      editor.value = editor.value.substring(0, pos) + replacement + editor.value.substring(pos + query.length);
+      saveEditorContent();
+      updateLineNumbers();
+      findInEditor(1);
+    }
+  }
+}
+
+// ========== Markdown 预览 ==========
+
+function switchEditorView(mode) {
+  var codeEl = $('editorCode');
+  var lineNums = $('editorLineNumbers');
+  var preview = $('mdPreview');
+  var codeBtn = $('editorCodeView');
+  var prevBtn = $('editorPreview');
+  var file = state.activeFileIndex >= 0 ? state.openFiles[state.activeFileIndex] : null;
+
+  if (mode === 'preview' && file && file.isText) {
+    if (codeEl) codeEl.style.display = 'none';
+    if (lineNums) lineNums.style.display = 'none';
+    if (preview) {
+      preview.style.display = 'block';
+      preview.innerHTML = renderMarkdown(codeEl?.value || '');
+    }
+    if (codeBtn) codeBtn.classList.remove('active');
+    if (prevBtn) prevBtn.classList.add('active');
+  } else {
+    if (codeEl) codeEl.style.display = '';
+    if (lineNums) lineNums.style.display = '';
+    if (preview) preview.style.display = 'none';
+    if (codeBtn) codeBtn.classList.add('active');
+    if (prevBtn) prevBtn.classList.remove('active');
+  }
+}
+
+function renderMarkdown(md) {
+  var html = esc(md);
+  // 代码块
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // 标题
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // 格式
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, text, url) {
+    var safeUrl = url.replace(/^(javascript|data|vbscript):/i, '#');
+    return '<a href="' + safeUrl + '" target="_blank" rel="noopener">' + text + '</a>';
+  });
+  // 引用
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+  // 列表
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  // 水平线
+  html = html.replace(/^---+$/gm, '<hr>');
+  // 换行
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+  html = '<p>' + html + '</p>';
+  return html;
+}
+
+// ========== 快速打开文件 ==========
+
+var quickOpenFiles = [];
+
+async function openQuickOpen() {
+  var overlay = $('quickOpenOverlay');
+  var input = $('quickOpenInput');
+  var list = $('quickOpenList');
+  if (!overlay || !input || !list) return;
+
+  // 加载文件列表
+  if (!state.workDir) { alert('请先选择工作目录'); return; }
+  var result = await window.api.invoke('get-file-tree', state.workDir);
+  if (!result.success) return;
+
+  quickOpenFiles = result.files.filter(function(f) { return f.type === 'file'; }).map(function(f) {
+    var rel = f.path.replace(state.workDir, '').replace(/\\/g, '/').replace(/^\//, '');
+    return { name: rel.split('/').pop(), path: f.path, rel: rel };
+  });
+
+  overlay.style.display = 'flex';
+  input.value = '';
+  filterQuickOpen('');
+  input.focus();
+
+  input.oninput = function() { filterQuickOpen(this.value); };
+  input.onkeydown = function(e) {
+    var items = list.querySelectorAll('.qo-item');
+    var active = list.querySelector('.qo-item.active');
+    var idx = active ? parseInt(active.getAttribute('data-idx')) : -1;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      var next = Math.min(idx + 1, items.length - 1);
+      items.forEach(function(it) { it.classList.remove('active'); });
+      if (items[next]) { items[next].classList.add('active'); items[next].scrollIntoView({ block: 'nearest' }); }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      var prev = Math.max(idx - 1, 0);
+      items.forEach(function(it) { it.classList.remove('active'); });
+      if (items[prev]) { items[prev].classList.add('active'); items[prev].scrollIntoView({ block: 'nearest' }); }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (active) {
+        var f = quickOpenFiles[parseInt(active.getAttribute('data-idx'))];
+        if (f) openFileInEditor(f.path, f.name);
+        closeQuickOpen();
+      }
+    } else if (e.key === 'Escape') {
+      closeQuickOpen();
+    }
+  };
+}
+
+function filterQuickOpen(query) {
+  var list = $('quickOpenList');
+  if (!list) return;
+  query = query.toLowerCase();
+  var filtered = query ? quickOpenFiles.filter(function(f) {
+    return f.name.toLowerCase().indexOf(query) >= 0 || f.rel.toLowerCase().indexOf(query) >= 0;
+  }) : quickOpenFiles.slice(0, 50);
+
+  list.innerHTML = filtered.slice(0, 50).map(function(f, i) {
+    return '<div class="qo-item' + (i === 0 ? ' active' : '') + '" data-idx="' + quickOpenFiles.indexOf(f) + '">' +
+      '<span class="qo-name">' + esc(f.name) + '</span>' +
+      '<span class="qo-path">' + esc(f.rel) + '</span></div>';
+  }).join('');
+
+  list.querySelectorAll('.qo-item').forEach(function(item) {
+    item.onclick = function() {
+      var f = quickOpenFiles[parseInt(this.getAttribute('data-idx'))];
+      if (f) openFileInEditor(f.path, f.name);
+      closeQuickOpen();
+    };
+  });
+}
+
+function closeQuickOpen() {
+  var overlay = $('quickOpenOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+// 点击遮罩关闭
+document.addEventListener('click', function(e) {
+  if (e.target.id === 'quickOpenOverlay') closeQuickOpen();
+});
+
+// ========== 对话导出 ==========
+
+async function exportConversation() {
+  if (!state.currentConversation || state.currentConversation.messages.length === 0) {
+    alert('没有可导出的对话');
+    return;
+  }
+  var conv = state.currentConversation;
+  var md = '# ' + conv.title + '\n\n';
+  md += '> 导出时间: ' + new Date().toLocaleString('zh-CN') + '\n\n---\n\n';
+
+  for (var i = 0; i < conv.messages.length; i++) {
+    var msg = conv.messages[i];
+    var role = msg.role === 'user' ? '**你**' : '**Claude**';
+    md += '### ' + role + '  ' + new Date(msg.timestamp).toLocaleTimeString('zh-CN') + '\n\n';
+    md += msg.content + '\n\n';
+
+    if (msg.toolCalls) {
+      for (var j = 0; j < msg.toolCalls.length; j++) {
+        var tc = msg.toolCalls[j];
+        md += '> 工具: ' + tc.name + '\n> ' + tc.input + '\n\n';
+      }
+    }
+  }
+
+  var result = await window.api.invoke('tool-write', state.workDir + '\\chat-export-' + Date.now() + '.md', md);
+  if (result.success) {
+    alert('导出成功!');
+  } else {
+    // fallback: 复制到剪贴板
+    navigator.clipboard.writeText(md);
+    alert('已复制到剪贴板');
+  }
+}
+
+// ========== 拖拽分隔条 ==========
+
+function setupResizers() {
+  // 侧边栏宽度拖拽
+  var sidebarResizer = $('resizerSidebar');
+  var sidebar = $('sidebar');
+  if (sidebarResizer && sidebar) {
+    sidebarResizer.onmousedown = function(e) {
+      e.preventDefault();
+      this.classList.add('active');
+      var startX = e.clientX;
+      var startW = sidebar.offsetWidth;
+      var appEl = $('app');
+
+      function onMove(ev) {
+        var newW = startW + (ev.clientX - startX);
+        newW = Math.max(160, Math.min(newW, window.innerWidth * 0.5));
+        sidebar.style.width = newW + 'px';
+        sidebar.style.flexShrink = '0';
+      }
+      function onUp() {
+        sidebarResizer.classList.remove('active');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    };
+  }
+
+}
+
+// ========== 文件树自动刷新 ==========
+
+function refreshFileTree() {
+  if (state.workDir) loadFileTree();
+}
+
+// 主题
+function applyTheme(theme) {
+  state.theme = theme;
+  if (theme === 'light') document.body.classList.add('light-theme');
+  else document.body.classList.remove('light-theme');
+  window.api.invoke('set-config', 'theme', theme);
+}
+
+function toggleTheme() { applyTheme(state.theme === 'dark' ? 'light' : 'dark'); }
+
+// 设置
+function openSettings() {
+  $('settingsModal').style.display = 'flex';
+  // 重置 tab 高亮到 api
+  document.querySelectorAll('.stab').forEach(function(b) { b.classList.remove('active'); });
+  var apiTab = document.querySelector('.stab[data-stab="api"]');
+  if (apiTab) apiTab.classList.add('active');
+  renderSettingsTab('api');
+}
+
+function renderSettingsTab(tab) {
+  var content = $('settingsContent');
+  if (!content) return;
+
+  if (tab === 'api') {
+    content.innerHTML =
+      '<div style="font-size:14px;font-weight:600;margin-bottom:16px">' + t('globalConfig') + '</div>' +
+      '<div class="form-group"><label>' + t('apiKeyLabel') + '</label><input type="password" id="cfgApiKey" value="' + esc(state.config.apiKey || '') + '" placeholder="sk-ant-..." /></div>' +
+      '<div class="form-row"><div class="form-group"><label>' + t('defaultModel') + '</label><select id="cfgModel">' + state.models.map(function(m) { return '<option value="' + m.id + '"' + (m.id === state.config.defaultModel ? ' selected' : '') + '>' + m.name + '</option>'; }).join('') + '</select></div>' +
+      '<div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="cfgMaxTokens" value="' + (state.config.maxTokens || 4096) + '" /></div></div>' +
+      '<button class="btn-primary" id="saveApiBtn" style="margin-bottom:20px">' + t('saveConfig') + '</button>' +
+      '<div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">' +
+      '<div style="font-size:14px;font-weight:600;margin-bottom:12px">' + t('addModel') + '</div>' +
+      '<div class="form-group"><label>' + t('modelName') + '</label><input id="customModelName" placeholder="例如: MiniMax" /></div>' +
+      '<div class="form-row"><div class="form-group"><label>' + t('modelId') + '</label><input id="customModelId" placeholder="例如: MiniMax-M2.7" /></div>' +
+      '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="customModelEndpoint" placeholder="例如: https://api.minimaxi.com/anthropic" /></div></div>' +
+      '<div class="form-group"><label>' + t('apiKeyModel') + '</label><input type="password" id="customModelApiKey" placeholder="' + t('modelPlaceholderKey') + '" /></div>' +
+      '<button class="btn-primary" id="addCustomBtn">' + t('addModelBtn') + '</button>' +
+      '<div style="font-size:13px;font-weight:600;margin:16px 0 8px">' + t('addedModels') + '</div>' +
+      '<div id="modelListArea"></div></div>';
+
+    renderModelList();
+
+    var saveApiBtn = $('saveApiBtn');
+    if (saveApiBtn) {
+      saveApiBtn.onclick = async function() {
+        await window.api.invoke('set-config', 'apiKey', $('cfgApiKey').value);
+        await window.api.invoke('set-config', 'defaultModel', $('cfgModel').value);
+        await window.api.invoke('set-config', 'maxTokens', parseInt($('cfgMaxTokens').value));
+        state.config = await window.api.invoke('get-config');
+        renderModelSelect(); showToast(t('saved'));
+      };
+    }
+
+
+
+
+    var addBtn = $('addCustomBtn');
+    if (addBtn) {
+      addBtn.onclick = async function() {
+        var name = $('customModelName').value.trim();
+        var id = $('customModelId').value.trim();
+        var endpoint = $('customModelEndpoint').value.trim();
+        var apiKey = $('customModelApiKey').value.trim();
+        if (!name || !id) { showToast(t('fillNameId')); return; }
+        await window.api.invoke('add-model', { provider: 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey });
+        state.config.models = await window.api.invoke('get-models');
+        rebuildModelList();
+        renderModelSelect(); renderModelList();
+        $('customModelName').value = ''; $('customModelId').value = ''; $('customModelEndpoint').value = ''; $('customModelApiKey').value = '';
+        showToast(t('added') + ': ' + name);
+      };
+    }
+
+  } else if (tab === 'theme') {
+    content.innerHTML =
+      '<div style="font-size:13px;font-weight:600;margin-bottom:12px">' + t('chooseTheme') + '</div>' +
+      '<div class="theme-options">' +
+        '<div class="theme-option' + (state.theme === 'dark' ? ' active' : '') + '" data-theme="dark"><div class="theme-icon">🌙</div><div class="theme-name">' + t('darkMode') + '</div></div>' +
+        '<div class="theme-option' + (state.theme === 'light' ? ' active' : '') + '" data-theme="light"><div class="theme-icon">☀️</div><div class="theme-name">' + t('lightMode') + '</div></div>' +
+      '</div>';
+    content.querySelectorAll('.theme-option').forEach(function(opt) {
+      opt.onclick = function() { applyTheme(this.getAttribute('data-theme')); renderSettingsTab('theme'); };
+    });
+
+  } else if (tab === 'general') {
+    var currentLang = state.config.language || 'zh';
+    content.innerHTML =
+      '<div class="form-group"><label>' + t('langLabel') + '</label>' +
+        '<div style="display:flex;gap:8px">' +
+        '<button class="btn-sm lang-btn' + (currentLang === 'zh' ? ' active' : '') + '" data-lang="zh">中文</button>' +
+        '<button class="btn-sm lang-btn' + (currentLang === 'en' ? ' active' : '') + '" data-lang="en">English</button>' +
+      '</div></div>' +
+      '<div class="form-group"><label>' + t('workDir') + '</label><div style="display:flex;gap:8px"><input id="cfgWorkDir" value="' + esc(state.workDir) + '" readonly style="flex:1" /><button class="btn-primary" id="selectWorkDirBtn">' + t('selectDir') + '</button></div></div>' +
+      '<div class="form-group"><label>' + t('allowedTools') + '</label><div style="display:flex;flex-wrap:wrap;gap:8px">' +
+        ['Read','Write','Edit','Glob','Grep','Bash','ListDirectory'].map(function(t) {
+          return '<label class="checkbox-item"><input type="checkbox" class="tool-check" value="' + t + '"' + (state.allowedTools.indexOf(t) >= 0 ? ' checked' : '') + ' /> ' + t + '</label>';
+        }).join('') + '</div></div>';
+    var selectBtn = $('selectWorkDirBtn');
+    if (selectBtn) {
+      selectBtn.onclick = async function() {
+        var dir = await window.api.invoke('select-folder');
+        if (dir) { state.workDir = dir; $('cfgWorkDir').value = dir; }
+      };
+    }
+    content.querySelectorAll('.tool-check').forEach(function(cb) {
+      cb.onchange = function() {
+        if (this.checked) { if (state.allowedTools.indexOf(this.value) < 0) state.allowedTools.push(this.value); }
+        else { state.allowedTools = state.allowedTools.filter(function(t) { return t !== cb.value; }); }
+      };
+    });
+    // 语言切换
+    content.querySelectorAll('.lang-btn').forEach(function(btn) {
+      btn.onclick = function() {
+        var lang = this.getAttribute('data-lang');
+        window.api.invoke('set-config', 'language', lang);
+        state.config.language = lang;
+        showToast(lang === 'zh' ? '已切换到中文' : 'Switched to English');
+        renderSettingsTab('general');
+      };
+    });
+  }
+}
+
+function renderModelList() {
+  var area = $('modelListArea');
+  if (!area) return;
+  var models = state.config.models || [];
+  if (models.length === 0) { area.innerHTML = '<div style="padding:8px;color:var(--text-secondary)">' + t('noModels') + '</div>'; return; }
+  area.innerHTML = models.map(function(m, i) {
+    return '<div class="model-card" data-idx="' + i + '">' +
+      '<div class="model-card-info">' +
+        '<div class="model-card-name">' + esc(m.name) + '</div>' +
+        '<div class="model-card-detail">ID: ' + esc(m.id) + '</div>' +
+        '<div class="model-card-detail">' + t('apiEndpoint') + ': ' + esc(m.endpoint || t('endpointDefault')) + '</div>' +
+        '<div class="model-card-detail">' + t('apiKeyModel') + ': ' + (m.apiKey ? t('keySet') : '<span style="color:var(--accent-red)">' + t('keyNotSet') + '</span>') + '</div>' +
+      '</div>' +
+      '<div class="model-card-actions">' +
+        '<button class="btn-sm" data-edit="' + i + '">' + t('editModel') + '</button>' +
+        '<button class="btn-sm" data-remove="' + i + '" style="color:var(--accent-red)">' + t('deleteModel') + '</button>' +
+      '</div></div>';
+  }).join('');
+
+  area.querySelectorAll('[data-remove]').forEach(function(btn) {
+    btn.onclick = async function() {
+      var idx = parseInt(this.getAttribute('data-remove'));
+      if (!confirm(t('confirmDelete') + ' "' + models[idx].name + '"？')) return;
+      await window.api.invoke('remove-model', idx);
+      state.config.models = await window.api.invoke('get-models');
+      rebuildModelList();
+      renderModelSelect();
+      renderModelList();
+    };
+  });
+
+  area.querySelectorAll('[data-edit]').forEach(function(btn) {
+    btn.onclick = function() {
+      var idx = parseInt(this.getAttribute('data-edit'));
+      openEditModelModal(idx);
+    };
+  });
+}
+
+function rebuildModelList() {
+  state.models = [
+    { name: 'Claude-3-Opus', id: 'claude-3-opus-20240229' },
+    { name: 'Claude-3-Sonnet', id: 'claude-3-sonnet-20240229' },
+    { name: 'Claude-3.5-Sonnet', id: 'claude-3-5-sonnet-20241022' }
+  ];
+  if (state.config.models) {
+    for (var i = 0; i < state.config.models.length; i++) {
+      var m = state.config.models[i];
+      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider });
+    }
+  }
+}
+
+function openEditModelModal(idx) {
+  var m = state.config.models[idx];
+  if (!m) return;
+
+  var overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.display = 'flex';
+  overlay.innerHTML =
+    '<div class="modal">' +
+      '<div class="modal-header"><h3>' + t('editModel') + '</h3><button class="btn-icon edit-close-btn">✕</button></div>' +
+      '<div class="form-group"><label>' + t('modelName') + '</label><input id="editModelName" value="' + esc(m.name) + '" /></div>' +
+      '<div class="form-group"><label>' + t('modelId') + '</label><input id="editModelId" value="' + esc(m.id) + '" /></div>' +
+      '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="editModelEndpoint" value="' + esc(m.endpoint || '') + '" placeholder="https://api.example.com" /></div>' +
+      '<div class="form-group"><label>' + t('apiKeyModel') + '</label><input type="password" id="editModelApiKey" value="' + esc(m.apiKey || '') + '" /></div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn-secondary edit-cancel-btn">取消</button>' +
+        '<button class="btn-primary edit-save-btn">' + t('saveConfig') + '</button>' +
+      '</div>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('.edit-close-btn').onclick = function() { overlay.remove(); };
+  overlay.querySelector('.edit-cancel-btn').onclick = function() { overlay.remove(); };
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  overlay.querySelector('.edit-save-btn').onclick = async function() {
+    var name = $('editModelName').value.trim();
+    var id = $('editModelId').value.trim();
+    var endpoint = $('editModelEndpoint').value.trim();
+    var apiKey = $('editModelApiKey').value.trim();
+    if (!name || !id) { alert(t('fillNameId')); return; }
+
+    var models = state.config.models.slice();
+    models[idx] = { provider: models[idx].provider || 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey };
+    await window.api.invoke('set-config', 'models', models);
+    state.config.models = models;
+    rebuildModelList();
+    renderModelSelect();
+    renderModelList();
+    overlay.remove();
+    showToast(t('saved'));
+  };
+}
+
+// 记忆管理
+function openMemory() {
+  $('memoryModal').style.display = 'flex';
+  renderMemoryList();
+}
+
+function renderMemoryList() {
+  var list = $('memoryList');
+  if (!list) return;
+  if (state.memories.length === 0) {
+    list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:12px">暂无记忆<br>对话中提取的关键信息会自动保存</div>';
+    return;
+  }
+  list.innerHTML = state.memories.map(function(m, i) {
+    var sourceTag = m.source === 'auto'
+      ? '<span class="memory-source auto">自动</span>'
+      : '<span class="memory-source manual">手动</span>';
+    return '<div class="memory-item" data-idx="' + i + '">' +
+      '<div class="memory-item-row">' +
+      sourceTag +
+      '<span class="memory-text">' + esc(m.content) + '</span>' +
+      '</div>' +
+      '<button class="memory-del" data-idx="' + i + '">✕</button>' +
+    '</div>';
+  }).join('');
+
+  list.querySelectorAll('.memory-del').forEach(function(btn) {
+    btn.onclick = function() {
+      var idx = parseInt(this.getAttribute('data-idx'));
+      state.memories.splice(idx, 1);
+      renderMemoryList();
+    };
+  });
+}
+
+function addMemory() {
+  var input = $('memoryInput');
+  if (!input) return;
+  var text = input.value.trim();
+  if (!text) return;
+  state.memories.push({ content: text, source: 'manual', createdAt: Date.now() });
+  input.value = '';
+  renderMemoryList();
+}
+
+async function saveMemoryContent() {
+  await window.api.invoke('save-memory', { memories: state.memories });
+  $('memoryModal').style.display = 'none';
+}
+
+function clearAllMemory() {
+  if (!confirm('确定清空所有记忆？')) return;
+  state.memories = [];
+  renderMemoryList();
+}
+
+// 从 URL 自动尝试添加 MCP 服务器
+async function tryMcpFromUrl(url) {
+  try {
+    var result = await window.api.invoke('add-mcp-from-url', url);
+    if (result.success) {
+      showToast(result.message);
+    }
+    // 不管成功失败都不阻塞，URL 照常发给 AI
+  } catch (e) {
+    // 静默失败
+  }
+}
+
+// MCP 服务器管理
+async function openMcpModal() {
+  $('mcpModal').style.display = 'flex';
+  // 请求最新状态
+  try {
+    state.mcpStatuses = await window.api.invoke('mcp-status');
+  } catch(e) {}
+  renderMcpList();
+}
+
+function renderMcpList() {
+  var area = $('mcpServerList');
+  if (!area) return;
+  if (state.mcpServers.length === 0) {
+    area.innerHTML = '<div style="padding:12px;color:var(--text-secondary);font-size:12px;text-align:center">暂无 MCP 服务器<br><span style="font-size:11px">添加后启动时自动连接</span></div>';
+    return;
+  }
+
+  // 获取连接状态
+  var statuses = state.mcpStatuses || [];
+
+  area.innerHTML = state.mcpServers.map(function(s, i) {
+    var status = statuses.find(function(st) { return st.name === s.name; });
+    var isConnected = status && status.connected;
+    var toolCount = status ? status.toolCount : 0;
+    var tools = status ? status.tools : [];
+
+    var statusHtml = isConnected
+      ? '<span class="mcp-status connected">已连接 (' + toolCount + ' 工具)</span>'
+      : '<span class="mcp-status disconnected">未连接</span>';
+
+    var toolsHtml = tools.length > 0
+      ? '<div class="mcp-tool-list">' + tools.map(function(t) { return '<span class="mcp-tool-tag">' + esc(t) + '</span>'; }).join('') + '</div>'
+      : '';
+
+    var connectBtn = isConnected
+      ? '<button class="btn-sm mcp-disconnect-btn" data-name="' + esc(s.name) + '">断开</button>'
+      : '<button class="btn-sm mcp-connect-btn" data-idx="' + i + '">连接</button>';
+
+    return '<div class="model-card">' +
+      '<div class="model-card-info">' +
+        '<div class="model-card-name">' + esc(s.name) + ' ' + statusHtml + '</div>' +
+        '<div class="model-card-detail">命令: ' + esc(s.command) + ' ' + esc((s.args || []).join(' ')) + '</div>' +
+        toolsHtml +
+      '</div>' +
+      '<div class="model-card-actions">' +
+        connectBtn +
+        '<button class="btn-sm mcp-del-btn" data-idx="' + i + '" style="color:var(--accent-red)">删除</button>' +
+      '</div></div>';
+  }).join('');
+
+  // 连接按钮
+  area.querySelectorAll('.mcp-connect-btn').forEach(function(btn) {
+    btn.onclick = async function() {
+      var idx = parseInt(this.getAttribute('data-idx'));
+      var s = state.mcpServers[idx];
+      this.textContent = '连接中...';
+      this.disabled = true;
+      var result = await window.api.invoke('mcp-connect', s);
+      if (result.success) {
+        showToast('已连接 ' + s.name + ': ' + result.tools.join(', '));
+      } else {
+        showToast('连接失败: ' + result.error);
+      }
+      renderMcpList();
+    };
+  });
+
+  // 断开按钮
+  area.querySelectorAll('.mcp-disconnect-btn').forEach(function(btn) {
+    btn.onclick = async function() {
+      var name = this.getAttribute('data-name');
+      await window.api.invoke('mcp-disconnect', name);
+      renderMcpList();
+    };
+  });
+
+  // 删除按钮
+  area.querySelectorAll('.mcp-del-btn').forEach(function(btn) {
+    btn.onclick = async function() {
+      var idx = parseInt(this.getAttribute('data-idx'));
+      if (!confirm('确定删除 MCP 服务器 "' + state.mcpServers[idx].name + '"？')) return;
+      // 如果已连接，先断开
+      var status = statuses.find(function(st) { return st.name === state.mcpServers[idx].name; });
+      if (status && status.connected) {
+        await window.api.invoke('mcp-disconnect', state.mcpServers[idx].name);
+      }
+      state.mcpServers.splice(idx, 1);
+      await window.api.invoke('save-mcp-servers', { servers: state.mcpServers });
+      renderMcpList();
+    };
+  });
+}
+
+async function addMcpServer() {
+  var name = $('mcpName').value.trim();
+  var command = $('mcpCommand').value.trim();
+  var argsText = $('mcpArgs').value.trim();
+  var cwd = $('mcpCwd').value.trim();
+  var envText = $('mcpEnv').value.trim();
+
+  if (!name || !command) { alert('请填写服务器名称和启动命令'); return; }
+
+  var args = argsText ? argsText.split('\n').filter(function(l) { return l.trim(); }) : [];
+  var env = {};
+  if (envText) {
+    try { env = JSON.parse(envText); } catch (e) { alert('环境变量格式错误，请使用 JSON 格式'); return; }
+  }
+
+  state.mcpServers.push({ name: name, command: command, args: args, cwd: cwd, env: env });
+  await window.api.invoke('save-mcp-servers', { servers: state.mcpServers });
+
+  $('mcpName').value = '';
+  $('mcpCommand').value = '';
+  $('mcpArgs').value = '';
+  $('mcpCwd').value = '';
+  $('mcpEnv').value = '';
+
+  renderMcpList();
+  showToast('MCP 服务器已添加: ' + name);
+}
+
+async function testMcpServer() {
+  var command = $('mcpCommand').value.trim();
+  var argsText = $('mcpArgs').value.trim();
+  var cwd = $('mcpCwd').value.trim();
+  var envText = $('mcpEnv').value.trim();
+
+  if (!command) { alert('请填写启动命令'); return; }
+
+  var args = argsText ? argsText.split('\n').filter(function(l) { return l.trim(); }) : [];
+  var env = {};
+  if (envText) {
+    try { env = JSON.parse(envText); } catch (e) { alert('环境变量格式错误'); return; }
+  }
+
+  var result = await window.api.invoke('test-mcp-server', { command: command, args: args, cwd: cwd, env: env });
+  if (result.success) {
+    alert('测试成功: ' + result.message + '\n工具: ' + (result.tools || []).join(', '));
+  } else {
+    alert('测试失败: ' + result.error);
+  }
+}
+
+// Skills 系统
+function renderSkills() {
+  var list = $('skillList');
+  if (!list) return;
+  if (state.skills.length === 0) {
+    list.innerHTML = '<div style="padding:12px;color:var(--text-secondary);font-size:12px;text-align:center">暂无 Skill<br>点击上方按钮添加</div>';
+    return;
+  }
+  list.innerHTML = state.skills.map(function(s, i) {
+    return '<div class="skill-item" data-idx="' + i + '">' +
+      '<div class="skill-name">' + esc(s.name) + '</div>' +
+      '<div class="skill-desc">' + esc(s.desc || '无描述') + '</div>' +
+      '<div class="skill-actions">' +
+        '<button class="btn-sm skill-use-btn" data-idx="' + i + '">引用</button>' +
+        '<button class="btn-sm skill-del-btn" data-idx="' + i + '" style="color:var(--accent-red)">删除</button>' +
+      '</div></div>';
+  }).join('');
+
+  list.querySelectorAll('.skill-use-btn').forEach(function(btn) {
+    btn.onclick = function() {
+      var idx = parseInt(this.getAttribute('data-idx'));
+      var skill = state.skills[idx];
+      var input = $('messageInput');
+      if (input) input.value = '/skill ' + skill.name + ' ';
+      input.focus();
+    };
+  });
+
+  list.querySelectorAll('.skill-del-btn').forEach(function(btn) {
+    btn.onclick = async function() {
+      var idx = parseInt(this.getAttribute('data-idx'));
+      if (!confirm('确定删除 Skill "' + state.skills[idx].name + '"？')) return;
+      state.skills.splice(idx, 1);
+      await window.api.invoke('save-skills', { skills: state.skills });
+      renderSkills();
+    };
+  });
+}
+
+function openSkillModal() {
+  $('skillModal').style.display = 'flex';
+  $('skillName').value = '';
+  $('skillDesc').value = '';
+  $('skillContent').value = '';
+  $('skillFilePath').value = '';
+}
+
+async function selectSkillFile() {
+  var result = await window.api.invoke('read-skill-file');
+  if (result) {
+    $('skillFilePath').value = result.path;
+    $('skillContent').value = result.content;
+  }
+}
+
+async function saveSkill() {
+  var name = $('skillName').value.trim();
+  var desc = $('skillDesc').value.trim();
+  var content = $('skillContent').value.trim();
+  if (!name) { alert('请填写 Skill 名称'); return; }
+  if (!content) { alert('请填写 Skill 内容'); return; }
+
+  // 检查重名
+  var existing = state.skills.findIndex(function(s) { return s.name === name; });
+  if (existing >= 0) {
+    if (!confirm('Skill "' + name + '" 已存在，是否覆盖？')) return;
+    state.skills[existing] = { name: name, desc: desc, content: content };
+  } else {
+    state.skills.push({ name: name, desc: desc, content: content });
+  }
+
+  await window.api.invoke('save-skills', { skills: state.skills });
+  $('skillModal').style.display = 'none';
+  renderSkills();
+  $('messageInput').focus();
+  showToast('Skill 已保存: ' + name);
+}
+
+// 模型选择
+function renderModelSelect() {
+  var select = $('modelSelect');
+  if (!select) return;
+  select.innerHTML = state.models.map(function(m) {
+    return '<option value="' + m.id + '"' + (m.id === state.config.defaultModel ? ' selected' : '') + '>' + m.name + '</option>';
+  }).join('');
+}
+
+// 启动
+init();
