@@ -1,42 +1,55 @@
 [中文](README.md)
 
-# cc-wrap — Claude Code Desktop (Chinese UI)
+# cc-wrap — Claude Code Desktop (Chinese-first)
 
-A lightweight Electron desktop app that brings the full power of Claude Code CLI to a graphical interface, designed for Chinese developers. Now with full Windows and macOS support.
+A lightweight Electron desktop app that brings Claude Code CLI's core capabilities into a GUI — Chinese-first interface, zero-friction third-party model setup, warm Claude-branded UI. Currently shipping a Windows NSIS installer.
 
 ![Interface](./screenshots/interface.jpg)
 
 ## What This Project Does
 
-The official Claude Code desktop client has two pain points: incomplete Chinese support and complex third-party model configuration. cc-wrap solves both — simpler setup and a friendlier experience.
-
-It also brings the full Claude Code CLI capability to a GUI, so developers unfamiliar with the command line can still enjoy AI-assisted coding with a native Chinese interface.
+The official Claude Code desktop client has two pain points: incomplete Chinese support and complex third-party model configuration. cc-wrap solves both — and brings the full CLI capability surface (agent loop, tool calls, MCP extensions, memory/skills) into a GUI so developers unfamiliar with the command line can still use it.
 
 ## Core Features
 
 | Feature | Description |
 |---------|-------------|
-| 🌐 Chinese UI | Full Chinese interface, slash commands with Chinese annotations (`/help`, `/clear`, `/config`, `/model`, etc.) |
-| 📁 File Operations | Read, write, edit, search, glob with workspace file tree |
-| 🔨 Bash Commands | Execute system commands for build, test, and deployment |
-| 🌐 Web Search | Built-in WebSearch / WebFetch for real-time network info |
-| 🔧 Model Switching | Dropdown selector, dual OpenAI / Anthropic format support, flexible third-party model integration |
-| 🔌 MCP Extensions | Connect MCP tool servers to extend agent capabilities |
-| 💾 Memory System | Cross-session persistence, context that doesn't expire |
-| 🧩 Skills Templates | Custom prompt templates, inject into System Prompt with one click |
-| 📡 Streaming Output | Watch the agent execute in real time, full transparency |
-| 🖥️ Headless Mode | CLI invocation, integrate into existing dev workflows |
-| 🛡️ Permission Management | Native confirmation dialogs for Write/Edit/Bash operations |
-| ⌨️ Custom Title Bar | Window controls, drag to move, system tray residence |
+| 🌐 Chinese UI | Fully localized interface, 14 slash commands (`/help` `/clear` `/model` `/memory` `/mcp` `/skill` `/theme` `/export` `/init` `/cost` `/permissions` `/tools` `/workdir` `/compact`) |
+| 📁 File Operations | Read · Write · Edit · Glob · Grep with automatic UTF-8 / UTF-16 / GBK detection; workspace file tree with context menu |
+| 🔨 Bash Commands | Non-blocking `spawn` execution, cancellable, with cwd / shell / env context |
+| 🌐 Web Tools | Built-in WebSearch / WebFetch — no extra setup |
+| 🔧 Model Switching | Top dropdown selector, **automatic Anthropic / OpenAI format detection**, drop-in third-party model support |
+| 🔌 MCP Extensions | Standard JSON-RPC over stdio implementation, ready-to-fill examples embedded in the dialog (MiniMax / filesystem / Amap, etc.) |
+| 📋 Plan UI Task Panel | Large tasks auto-decomposed, progress visible (○ → ◐ → ✓), manually toggleable |
+| 💾 Memory System | Cross-conversation persistence for preferences and project context, both auto-extracted and manual |
+| 🧩 Skills Templates | Custom prompt templates, injected into System Prompt on demand |
+| 🖼️ Image Recognition | Paste / drag-and-drop, auto-saved to disk so MCP tools can read it; non-vision models auto-strip images to avoid 400 errors |
+| ✨ Markdown Rich Text | Tables, lists, blockquotes, code blocks (highlight.js, 190+ languages), Serif headings |
+| 🎨 Warm Theme | Claude-branded palette, light & dark modes, adjustable font size (12-20px) |
+| 📡 Streaming Output | Real-time agent execution, incremental DOM for tool calls, visible "thinking..." indicator |
+| 🛡️ Permission Management | Confirmation modal for Write / Edit / Bash; "always allow" choice persists across restarts |
+| 🔄 Failure Retry | API failures highlight the message in red with a one-click retry button |
+| ⚙️ Custom System Prompt | Edit additional instructions in Settings; takes effect on the next conversation |
+| ⌨️ Custom Title Bar | Frameless + draggable + system tray; window position and size auto-restored |
 
 ## Supported Models
 
-Any API compatible with the following formats is supported:
+Any API compatible with these formats works:
 
 - **Anthropic format**: `/v1/messages`, streaming SSE
-- **OpenAI format**: `/v1/chat/completions`, streaming chunks
+- **OpenAI format**: `/v1/chat/completions`, streaming chunks (with `tool_calls`)
 
-Tested with: Claude series, DeepSeek series, Qwen series, MiniMax, and more.
+Tested with: Claude series, DeepSeek series, Qwen / Qwen-VL, MiniMax / MiniMax-VL, GLM-4v, Step-1v, and more.
+
+## Quick Start
+
+```bash
+git clone <repo>
+cd claude-desktop
+npm install
+npm start             # Development mode
+npm run build         # Build Windows NSIS installer into dist/
+```
 
 ## Architecture
 
@@ -47,20 +60,28 @@ Tested with: Claude series, DeepSeek series, Qwen series, MiniMax, and more.
 │                  │ IPC │                  │
 │  - Chat UI       │     │  - Agent Loop    │
 │  - File Tree     │     │  - API Client    │
-│  - Settings      │     │  - Tool Executor │
-│                  │     │  - MCP Client    │
+│  - Editor        │     │  - Tool Executor │
+│  - Task Panel    │     │  - MCP Client    │
 └──────────────────┘     └──────────────────┘
          ▲                        ▲
          │               ┌────────┴────────┐
          └──────────────►│   preload.js    │
-              contextBridge (security sandbox)
+            contextBridge (whitelist IPC + sandbox)
 ```
 
-- **Main**: Window management, IPC handlers, agent loop, API client, MCP client
-- **Renderer**: Chat UI, file tree, settings panel, memory management
-- **Preload**: `contextBridge` whitelist isolation, all IPC channels controlled
+- **Main**: Window management, agent loop (max 50 rounds, auto context compression at ~150K tokens), API client (Anthropic / OpenAI dual format + vision-model detection), tool executor, MCP client
+- **Renderer**: Chat UI, file tree, settings panel, memory management, task panel, file editor (with image preview)
+- **Preload**: `contextBridge` whitelist isolation — every IPC channel is explicitly registered; non-whitelisted requests are rejected. highlight.js is exposed to the renderer through preload
+
+## Data Storage
+
+All user data lives under `%APPDATA%/cc-wrap/` (Windows):
+
+- `config.json` — settings (API keys encrypted via Electron `safeStorage`)
+- `conversations.json` — chat history (atomic write + debounce + immediate flush on completion)
+- `memory.json` / `skills.json` / `mcp-servers.json` — per-module JSON
+- `pasted-images/` — auto-saved pasted images
 
 ---
 
-> ⭐ If you find this useful, star it!
-> v1.0 — bug reports and PRs are welcome!
+> ⭐ Star if helpful. Issues and PRs welcome.
