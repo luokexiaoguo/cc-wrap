@@ -20,7 +20,7 @@ const INVOKE_CHANNELS = [
   'mcp-connect', 'mcp-disconnect', 'mcp-status',
   'fetch-web-content', 'add-mcp-from-url',
   'get-recent-projects', 'add-recent-project',
-  'get-app-icon',
+  'get-app-icon', 'get-app-version', 'open-external',
   'get-conversations', 'save-conversations',
   'get-tasks', 'clear-tasks',
   'get-logs', 'clear-logs', 'clear-cache',
@@ -33,7 +33,8 @@ const ON_CHANNELS = [
   'agent-complete', 'agent-permission-request',
   'auto-memories-extracted', 'mcp-status',
   'tasks-changed', 'skills-changed',
-  'agent-question'
+  'agent-question',
+  'tray-new-conversation', 'tray-open-settings'
 ];
 
 const SEND_CHANNELS = [

@@ -36,6 +36,8 @@ var I18N = {
     clearPastedImages: '清理粘贴的图片', clearConversations: '清理对话历史',
     clearAllCache: '清理所有缓存', clearConfirm: '确定要清理吗？此操作不可撤销。',
     exportSuccess: '对话已导出为 Markdown 文件', exportClipboard: '导出失败，已复制到剪贴板',
+    about: '关于', appVersion: '版本', appDescription: 'cc-wrap 是一个基于 Electron 的 Claude Code 桌面前端，支持多模型、MCP 工具扩展、Skills 注入、记忆系统等功能。',
+    githubRepo: 'GitHub 仓库',
   },
   en: {
     newChat: 'New Chat', exportBtn: 'Export', sendPlaceholder: 'Type a message... (Enter to send, Ctrl+V paste image)',
@@ -67,6 +69,8 @@ var I18N = {
     clearPastedImages: 'Clear Pasted Images', clearConversations: 'Clear Conversations',
     clearAllCache: 'Clear All Cache', clearConfirm: 'Are you sure? This action cannot be undone.',
     exportSuccess: 'Conversation exported as Markdown', exportClipboard: 'Export failed, copied to clipboard',
+    about: 'About', appVersion: 'Version', appDescription: 'cc-wrap is an Electron desktop frontend for Claude Code, supporting multiple models, MCP tools, Skills, and memory system.',
+    githubRepo: 'GitHub Repository',
   }
 };
 function t(key) {
@@ -101,6 +105,7 @@ function applyLanguage() {
     else if (tab === 'theme') btn.textContent = t('themeSettings');
     else if (tab === 'general') btn.textContent = t('generalSettings');
     else if (tab === 'logs') btn.textContent = t('logs');
+    else if (tab === 'about') btn.textContent = t('about');
   });
   // 文件面板按钮
   el = $('openFolderBtn'); if (el) el.textContent = t('openFolder');
@@ -741,6 +746,14 @@ function setupEvents() {
   // ========== 导出 ==========
   var exportBtn = $('exportBtn');
   if (exportBtn) exportBtn.onclick = function() { exportConversation(); };
+
+  // ========== 托盘事件 ==========
+  window.api.on('tray-new-conversation', function() {
+    createNewConversation();
+  });
+  window.api.on('tray-open-settings', function() {
+    openSettings();
+  });
 
   // ========== Ctrl+P 快速打开 ==========
   document.addEventListener('keydown', function(e) {
@@ -3670,6 +3683,23 @@ function renderSettingsTab(tab) {
         searchTimer = setTimeout(function() { loadLogs(searchInput.value); }, 300);
       };
     }
+  } else if (tab === 'about') {
+    (async function() {
+      var ver = await window.api.invoke('get-app-version');
+      content.innerHTML =
+        '<div style="text-align:center;padding:40px 20px">' +
+          '<img src="' + await window.api.invoke('get-app-icon', 64) + '" style="width:64px;height:64px;border-radius:12px;margin-bottom:16px" />' +
+          '<h2 style="margin:0 0 4px">cc-wrap</h2>' +
+          '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:20px">' + t('appVersion') + ' ' + esc(ver) + '</div>' +
+          '<p style="font-size:13px;color:var(--text-secondary);max-width:360px;margin:0 auto 24px;line-height:1.6">' + t('appDescription') + '</p>' +
+          '<a href="#" id="aboutGitHubLink" style="color:var(--accent);font-size:13px">' + t('githubRepo') + '</a>' +
+        '</div>';
+      var ghLink = $('aboutGitHubLink');
+      if (ghLink) ghLink.onclick = function(e) {
+        e.preventDefault();
+        window.api.invoke('open-external', 'https://github.com/luokexiaoguo/cc-wrap');
+      };
+    })();
   }
 }
 

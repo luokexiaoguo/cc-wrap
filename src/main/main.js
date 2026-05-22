@@ -271,6 +271,33 @@ function createTray() {
         }
       }
     },
+    {
+      label: '隐藏窗口',
+      click: () => {
+        if (mainWindow) mainWindow.hide();
+      }
+    },
+    { type: 'separator' },
+    {
+      label: '新建对话',
+      click: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents.send('tray-new-conversation');
+        }
+      }
+    },
+    {
+      label: '设置',
+      click: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents.send('tray-open-settings');
+        }
+      }
+    },
     { type: 'separator' },
     {
       label: '退出',
@@ -323,6 +350,21 @@ app.whenReady().then(() => {
       store.set(key, value);
     }
     return true;
+  });
+
+  // 返回应用版本
+  ipcMain.handle('get-app-version', () => {
+    try {
+      const pkg = require(path.join(__dirname, '../../package.json'));
+      return pkg.version;
+    } catch { return '未知'; }
+  });
+
+  // 在默认浏览器中打开外部链接
+  ipcMain.handle('open-external', (event, url) => {
+    if (url && typeof url === 'string') {
+      shell.openExternal(url);
+    }
   });
 
   // 返回应用图标 data URL（可选 size，默认 20x20，向后兼容）
