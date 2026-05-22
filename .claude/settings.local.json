@@ -58,7 +58,8 @@
       "Bash(npm version *)",
       "Read(//c/Users/luoke/AppData/Roaming/cc-wrap/logs/**)",
       "Read(//c/Users/luoke/AppData/Roaming/cc-wrap/**)",
-      "Read(//c/Users/luoke/AppData/Roaming/cc-wrap/pasted-images/**)"
+      "Read(//c/Users/luoke/AppData/Roaming/cc-wrap/pasted-images/**)",
+      "Bash(git commit *)"
     ]
   }
 }

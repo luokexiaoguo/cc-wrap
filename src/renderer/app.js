@@ -35,6 +35,7 @@ var I18N = {
     clearCache: '清理缓存', cacheCleared: '缓存已清理',
     clearPastedImages: '清理粘贴的图片', clearConversations: '清理对话历史',
     clearAllCache: '清理所有缓存', clearConfirm: '确定要清理吗？此操作不可撤销。',
+    exportSuccess: '对话已导出为 Markdown 文件', exportClipboard: '导出失败，已复制到剪贴板',
   },
   en: {
     newChat: 'New Chat', exportBtn: 'Export', sendPlaceholder: 'Type a message... (Enter to send, Ctrl+V paste image)',
@@ -65,6 +66,7 @@ var I18N = {
     clearCache: 'Clear Cache', cacheCleared: 'Cache cleared',
     clearPastedImages: 'Clear Pasted Images', clearConversations: 'Clear Conversations',
     clearAllCache: 'Clear All Cache', clearConfirm: 'Are you sure? This action cannot be undone.',
+    exportSuccess: 'Conversation exported as Markdown', exportClipboard: 'Export failed, copied to clipboard',
   }
 };
 function t(key) {
@@ -1011,6 +1013,23 @@ function setupEvents() {
       showToast('请求失败，可点消息下方"重试"重发', 'error');
     }
 
+    // 捕获 token 使用数据
+    if (data.success && data.usage && state.currentConversation) {
+      var conv = state.currentConversation;
+      var lastMsg = conv.messages[conv.messages.length - 1];
+      if (lastMsg && lastMsg.role === 'assistant') {
+        lastMsg.inputTokens = data.usage.input_tokens || 0;
+        lastMsg.outputTokens = data.usage.output_tokens || 0;
+      }
+      // 遍历消息重新计算对话总 token（具备自愈能力）
+      conv.totalInputTokens = 0;
+      conv.totalOutputTokens = 0;
+      conv.messages.forEach(function(m) {
+        conv.totalInputTokens += m.inputTokens || 0;
+        conv.totalOutputTokens += m.outputTokens || 0;
+      });
+    }
+
 
     saveConversations();
     renderMessages();
@@ -1186,6 +1205,9 @@ function renderConversations() {
     html += '<div class="conversation-item' + (isActive ? ' active' : '') + (c.pinned ? ' pinned' : '') + '" data-id="' + c.id + '" title="右键查看更多操作">' +
       (c.pinned ? '<span class="pin-icon">📌</span>' : '') +
       '<span class="title">' + esc(c.title) + '</span>' +
+      ((c.totalInputTokens || c.totalOutputTokens)
+        ? '<span class="conv-tokens">↑' + (c.totalInputTokens || 0) + '</span>'
+        : '') +
       '<button class="del" data-del="' + c.id + '" title="删除">✕</button></div>';
   }
   list.innerHTML = html;
@@ -1401,7 +1423,10 @@ function renderMessages() {
       '<div class="msg-actions">' +
       (msg.isError ? '<button class="msg-action retry-btn" data-idx="' + i + '">↻ 重试</button>' : '') +
       '<button class="msg-action copy-btn" data-idx="' + i + '">复制</button>' +
-      (!isUser && !msg.isError ? '<button class="msg-action regen-btn" data-idx="' + i + '">重新生成</button>' : '') + '</div></div>';
+      (!isUser && !msg.isError ? '<button class="msg-action regen-btn" data-idx="' + i + '">重新生成</button>' : '') + '</div>' +
+      (!isUser && (msg.inputTokens || msg.outputTokens)
+        ? '<div class="msg-tokens">↑' + msg.inputTokens + ' · ↓' + msg.outputTokens + '</div>'
+        : '') + '</div>';
   }
   messagesEl.innerHTML = html;
   messagesEl.querySelectorAll('.copy-btn').forEach(function(btn) {
@@ -2046,7 +2071,11 @@ function handleSlashCommand(cmd) {
       addAssistantMsg(helpText);
       break;
     case '/clear':
-      if (state.currentConversation) state.currentConversation.messages = [];
+      if (state.currentConversation) {
+        state.currentConversation.messages = [];
+        state.currentConversation.totalInputTokens = 0;
+        state.currentConversation.totalOutputTokens = 0;
+      }
       saveConversations(); renderMessages();
       break;
     case '/compact':
@@ -2054,7 +2083,32 @@ function handleSlashCommand(cmd) {
       break;
     case '/config': openSettings(); break;
     case '/cost':
-      addAssistantMsg('Token 统计功能已移除。Token 消耗取决于模型和对话长度。');
+      if (!state.currentConversation) {
+        addAssistantMsg('没有活跃的对话');
+        break;
+      }
+      var c = state.currentConversation;
+      var ci = c.totalInputTokens || 0;
+      var co = c.totalOutputTokens || 0;
+      var lines = ['【当前对话 Token 消耗】'];
+      lines.push('输入 ↑' + ci + '  输出 ↓' + co + '  总计 ' + (ci + co));
+      // 逐条消息明细
+      var hasDetail = false;
+      c.messages.forEach(function(m, idx) {
+        if (m.inputTokens || m.outputTokens) {
+          if (!hasDetail) { lines.push(''); lines.push('消息明细:'); hasDetail = true; }
+          var label = m.role === 'user' ? '用户' : 'Claude';
+          lines.push('  #' + (idx + 1) + ' ' + label + ':  ↑' + (m.inputTokens || 0) + '  ↓' + (m.outputTokens || 0));
+        }
+      });
+      // 全部对话累计
+      var allIn = 0, allOut = 0;
+      state.conversations.forEach(function(cv) {
+        allIn += cv.totalInputTokens || 0;
+        allOut += cv.totalOutputTokens || 0;
+      });
+      lines.push(''); lines.push('全部对话累计: ↑' + allIn + '  ↓' + allOut + '  总计 ' + (allIn + allOut));
+      addAssistantMsg(lines.join('\n'));
       break;
     case '/model':
       if (args) {
@@ -3115,13 +3169,14 @@ async function exportConversation() {
     }
   }
 
-  var result = await window.api.invoke('tool-write', state.workDir + '\\chat-export-' + Date.now() + '.md', md);
+  var result = await window.api.invoke('export-conversation', md, state.workDir);
   if (result.success) {
-    alert('导出成功!');
+    alert(t('exportSuccess') + '\n' + result.path);
+  } else if (result.error === '已取消') {
+    // 用户取消，不做任何事
   } else {
-    // fallback: 复制到剪贴板
     navigator.clipboard.writeText(md);
-    alert('已复制到剪贴板');
+    alert(t('exportClipboard'));
   }
 }
 

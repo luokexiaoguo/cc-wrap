@@ -1089,6 +1089,22 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('export-conversation', async (event, md, workDir) => {
+    const defaultDir = (workDir && fs.existsSync(workDir)) ? workDir : os.homedir();
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '导出对话',
+      defaultPath: path.join(defaultDir, 'chat-export-' + new Date().toISOString().slice(0, 10) + '.md'),
+      filters: [{ name: 'Markdown', extensions: ['md'] }]
+    });
+    if (result.canceled) return { success: false, error: '已取消' };
+    try {
+      fs.writeFileSync(result.filePath, md, 'utf-8');
+      return { success: true, path: result.filePath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
   // ========== 清除缓存 ==========
 
   ipcMain.handle('clear-cache', async (event, type) => {

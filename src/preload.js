@@ -24,7 +24,7 @@ const INVOKE_CHANNELS = [
   'get-conversations', 'save-conversations',
   'get-tasks', 'clear-tasks',
   'get-logs', 'clear-logs', 'clear-cache',
-  'export-logs'
+  'export-logs', 'export-conversation'
 ];
 
 const ON_CHANNELS = [
