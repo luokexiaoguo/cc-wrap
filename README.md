@@ -2,7 +2,7 @@
 
 # cc-wrap — Claude Code 中文桌面端
 
-一款面向中文开发者的 Electron 桌面应用，把 Claude Code CLI 的核心能力搬进图形界面 — 中文优先、第三方模型接入零门槛、UI 暖调质感。当前提供 Windows NSIS 安装包。
+一款面向中文开发者的 Electron 桌面应用，把 Claude Code CLI 的核心能力搬进图形界面 — 中文优先、第三方模型接入零门槛、UI 暖调质感。当前提供 Windows NSIS 安装包。（MAC端正在打包中，敬请期待）
 
 ![界面截图](./screenshots/interface.jpg)
 
