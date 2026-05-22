@@ -57,17 +57,25 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 
 ### Tool system (`src/main/tools.js` + `tool-executor.js`)
 
-12 built-in tools defined in `tools.js` with Anthropic-format `input_schema`: Read, Write, Edit, Glob, Grep, Bash, ListDirectory, WebSearch, WebFetch, Agent, TaskCreate, TaskUpdate.
+13 built-in tools defined in `tools.js` with Anthropic-format `input_schema`: Read, Write, Edit, Glob, Grep, Bash, ListDirectory, WebSearch, WebFetch, Agent, TaskCreate, TaskUpdate, AskUserQuestion.
 
 `tools.js` exports pure data + helpers (`getEnabledTools`, `mergeTools`, `getOpenAITools`). `tool-executor.js` contains the implementations, dispatched via `TOOL_HANDLERS` map. `executeTool()` checks built-in handlers first, falls back to MCP handlers from `mcp-client.getMcpToolHandler`.
 
 **AskUserQuestion** is a special tool that pauses the agent loop to ask the user a multiple-choice question. The handler in `tool-executor.js` sends an `agent-question` IPC to the renderer, then returns a Promise that resolves when the user responds via `agent-question-response` IPC. The renderer (`app.js`) listens for `agent-question`, finds the last running `AskUserQuestion` tool card in the DOM, and injects a `.tool-call-question` div with option buttons + "Other..." text input. On selection, it sends the answer back via `window.api.send('agent-question-response', requestId, answer)`. The handler supports cancellation via `ctx.signal` and a 10-minute timeout. IPC channels: `agent-question` (ON_CHANNELS) + `agent-question-response` (SEND_CHANNELS).
 
-**Read tool encoding handling** (`readTextSmart` in `tool-executor.js`, mirrored in `main.js` as `readTextWithDetectedEncoding`): detects UTF-8 BOM → UTF-16 LE/BE BOM → strict UTF-8 → GBK (Windows ANSI fallback via `iconv-lite`) → latin1. Edit/Grep still hard-code utf-8 (safe — non-UTF-8 read yields garbled string, Edit match then fails harmlessly).
+**Read tool encoding handling** (`readTextSmart` in `tool-executor.js`, mirrored in `main.js` as `readTextWithDetectedEncoding`): detects UTF-8 BOM → UTF-16 LE/BE BOM → strict UTF-8 → GBK (Windows ANSI fallback via `iconv-lite`) → latin1. Edit and Grep tools also use `readTextSmart` (not bare `'utf-8'`).
 
 **Bash** uses `spawn` (non-blocking, `tree-kill` on cancel). Shell defaults to `process.env.COMSPEC`; can be overridden via `executeTool` context `shell` param.
 
 **Task tools** (`taskCreate` / `taskUpdate`) emit `tasks-changed` IPC to the renderer after each mutation, driving the Plan UI panel. Storage is an in-memory `Map` (`taskStore`), cleared via `clear-tasks` IPC when the user switches conversations.
+
+### Logger (`src/main/logger.js`)
+
+Hooks `console.log/error/warn` to write both to terminal and a file. `initLogger()` must be called at module level (before `app.whenReady`); `setLogPath(userDataPath)` is called inside `app.whenReady` since `app.getPath()` isn't available earlier. 5MB log rotation (`app.log` → `app.old.log`). IPC handlers: `get-logs` (search + last N lines), `clear-logs`, `export-logs` (native save dialog).
+
+### Settings: Log viewer & Cache clear
+
+Settings has a "日志" tab (`data-stab="logs"`) with search (300ms debounce), refresh, clear, export buttons, and a `<pre>` viewer. The "通用" tab has a cache-clear section with buttons for pasted-images, conversations, and all-cache. Clearing conversations resets `state.conversations` and re-renders the UI.
 
 ### MCP client (`src/main/mcp-client.js`)
 
@@ -79,7 +87,16 @@ Composition order (later overrides earlier semantically): base Claude Code ident
 
 ### Renderer architecture (`src/renderer/app.js`)
 
-Single ~3000-line file holding a global `state` object (`conversations`, `currentConversation`, `config`, `models`, `skills`, `mcpServers`, `mcpStatuses`, `workDir`, `memories`, `isGenerating`, `attachedImage`, `tasks`, `openFiles`, `agentMessages`, etc.). Function-based, no framework.
+Single ~4100-line file holding a global `state` object
+
+**Token statistics**: `agent-complete` IPC carries `usage: { input_tokens, output_tokens }`. The renderer stores these per assistant message (`inputTokens`/`outputTokens`) and recalculates conversation totals (`totalInputTokens`/`totalOutputTokens`) on every completion. Displayed per-message (`↑N · ↓N`) and in conversation sidebar. `/cost` slash command shows full breakdown per-message and across all conversations.
+
+**Export conversation**: the toolbar "导出" button formats conversation as Markdown and calls `export-conversation` IPC which opens a native save dialog (default directory = workDir).
+
+```text
+state object fields: conversations, currentConversation, config, models, skills, mcpServers, mcpStatuses, workDir, memories, isGenerating, attachedImage, tasks, openFiles, agentMessages, etc.
+```
+Function-based, no framework.
 
 **Streaming render**: `agent-stream-text` events append to `.msg-content` as text nodes (with class `streaming` for `white-space: pre-wrap` to preserve newlines). On `agent-complete`, `renderMessages()` re-renders the full message tree with markdown parsed (`formatContent`) — at that point `.streaming` class is cleared. Tool calls use incremental DOM (`appendToolCallIncremental` / `updateToolCallIncremental`, indexed by `data-tc-id`) to avoid full re-renders on every event.
 
@@ -94,7 +111,8 @@ Single ~3000-line file holding a global `state` object (`conversations`, `curren
 All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 
 - **`config.json`** (electron-store) — defaults seeded in `main.js` Store constructor. Schema includes: `apiKey`, `apiEndpoint`, `defaultModel`, `models[]`, `theme`, `fontSize`, `language`, `maxTokens`, `temperature`, `workDirectory`, `recentProjects[]`, `minimizeToTray`, `chatPaneWidth`, `alwaysAllowedTools[]`, `customSystemPrompt`, `windowBounds`. API keys in `models[]` are encrypted via electron `safeStorage` with `enc:<base64>` prefix; `readDecryptedConfig(store)` is the single entry point in main process for reading a fully-decrypted snapshot.
-- **`conversations.json`** — chat history (atomic write + 300ms debounce + `beforeunload` flush + `flushConversations()` called immediately on `agent-complete`). Migrated from `localStorage` on first launch.
+- **`conversations.json`** — chat history (atomic write + 300ms debounce + `beforeunload` flush + `flushConversations()` called immediately on `agent-complete`). Migrated from `localStorage` on first launch. Each message can have `inputTokens`/`outputTokens` fields; each conversation has `totalInputTokens`/`totalOutputTokens`.
+- **`logs/app.log`** — rolling log file from `logger.js` (5MB rotation).
 - **`memory.json`** — user memories (manual + auto-extracted)
 - **`skills.json`** — Skills definitions
 - **`mcp-servers.json`** — MCP server configs (NOT in electron-store; raw JSON read/written by `get-mcp-servers` / `save-mcp-servers` IPC handlers in main.js)
@@ -122,4 +140,3 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 - **Streaming class cleanup**: `.msg-content.streaming` MUST be removed on every termination path (`agent-complete`, error catch, `stopGeneration`) via `clearStreamingMarks()`. Otherwise subsequent messages render with `pre-wrap` and look broken.
 - **Conversation flush on completion**: `flushConversations()` is called on `agent-complete` — don't replace it with `saveConversations()` (which is debounced 300ms and risks losing data if the process crashes immediately after).
 - **OpenAI image stripping**: if you add a new vision model, update `modelSupportsVision` regex in `api-client.js`, otherwise users with that model will hit the same 400 cycle that broke DeepSeek before.
-- **Editor encoding hard-codes**: Edit and Grep tools still pass `'utf-8'` literally. Don't "fix" this by swapping to `readTextSmart` without also making Write/Edit preserve and re-emit the detected encoding — otherwise the user's GBK file becomes UTF-8 silently.
