@@ -9,6 +9,7 @@
   --accent: #d97757;
   --accent-hover: #c96442;
   --accent-soft: rgba(217,119,87,0.14);
+  --accent-bg: rgba(217,119,87,0.10);
   --accent-green: #6fa86b;
   --accent-red: #e07a5f;
   --accent-yellow: #d4a456;
@@ -36,6 +37,7 @@ body.light-theme {
   --accent: #c96442;
   --accent-hover: #b25535;
   --accent-soft: rgba(201,100,66,0.12);
+  --accent-bg: rgba(201,100,66,0.08);
   --accent-green: #4a7c47;
   --accent-red: #b3463a;
   --accent-yellow: #b08344;
@@ -827,6 +829,88 @@ body.light-theme .hl-attr { color: #875826; }
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== AskUserQuestion 选择题 UI ===== */
+.tool-call-question {
+  margin-top: 10px;
+  padding: 14px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.question-text {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.q-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 8px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+  color: var(--text-primary);
+}
+.q-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--bg-secondary);
+}
+.q-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.q-option:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.q-opt-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+.q-opt-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.q-other {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.q-other-input {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+.q-other-input:focus {
+  border-color: var(--accent);
+}
+.q-other-submit {
+  padding: 8px 16px;
+  white-space: nowrap;
+}
+.q-other-submit:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 
 /* ===== 任务进度面板（Plan UI） — 贴 toolbar 下，左右贴边 ===== */
 .task-panel {

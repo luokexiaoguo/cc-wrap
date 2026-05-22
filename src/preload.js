@@ -30,11 +30,13 @@ const ON_CHANNELS = [
   'agent-stream-text', 'agent-stream-tool-start', 'agent-stream-tool-result',
   'agent-complete', 'agent-permission-request',
   'auto-memories-extracted', 'mcp-status',
-  'tasks-changed', 'skills-changed'
+  'tasks-changed', 'skills-changed',
+  'agent-question'
 ];
 
 const SEND_CHANNELS = [
-  'agent-permission-response'
+  'agent-permission-response',
+  'agent-question-response'
 ];
 
 contextBridge.exposeInMainWorld('api', {

@@ -614,6 +614,63 @@ async function installSkill(input, ctx) {
   }
 }
 
+// ==================== 向用户提问 ====================
+
+function askUserQuestion(input, ctx) {
+  return new Promise((resolve) => {
+    const requestId = 'ask_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+
+    if (!ctx.window || ctx.window.isDestroyed()) {
+      resolve({ error: '没有可用窗口显示问题' });
+      return;
+    }
+
+    ctx.window.webContents.send('agent-question', {
+      requestId,
+      question: input.question || '',
+      options: input.options || []
+    });
+
+    const { ipcMain } = require('electron');
+    let timer = null;
+    let settled = false;
+
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      ipcMain.removeListener('agent-question-response', handler);
+      if (timer) clearTimeout(timer);
+      if (ctx.signal) {
+        try { ctx.signal.removeEventListener('abort', onAbort); } catch (_) {}
+      }
+    };
+
+    const handler = (event, responseId, answer) => {
+      if (responseId !== requestId) return;
+      cleanup();
+      resolve({ content: answer || '(未选择)' });
+    };
+
+    const onAbort = () => {
+      cleanup();
+      resolve({ content: '用户取消了操作' });
+    };
+
+    if (ctx.signal) {
+      if (ctx.signal.aborted) { resolve({ content: '用户取消了操作' }); return; }
+      ctx.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    ipcMain.on('agent-question-response', handler);
+
+    // 10 分钟超时
+    timer = setTimeout(() => {
+      cleanup();
+      resolve({ content: '选择题超时未作答' });
+    }, 10 * 60 * 1000);
+  });
+}
+
 // ==================== 子代理（占位）====================
 
 async function agent(input) {
@@ -641,6 +698,7 @@ const TOOL_HANDLERS = {
   TaskCreate: taskCreate,
   TaskUpdate: taskUpdate,
   InstallSkill: installSkill,
+  AskUserQuestion: askUserQuestion,
 };
 
 /**

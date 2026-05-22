@@ -47,7 +47,8 @@
       "Bash(grep -E '^\\(electron|electron-store|electron-builder|iconv-lite|tree-kill|highlight\\\\.js|undici|@electron\\)$')",
       "Bash(awk *)",
       "Bash(git add *)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

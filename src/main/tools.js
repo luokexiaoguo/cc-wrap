@@ -162,6 +162,31 @@ const TOOL_DEFINITIONS = [
       },
       required: ['name', 'description', 'content']
     }
+  },
+  {
+    name: 'AskUserQuestion',
+    description: 'Ask the user a multiple-choice question and wait for their answer. Use this at decision points where you need user input to proceed: clarifying ambiguous requirements, choosing between implementation approaches, confirming a non-trivial direction before coding, picking among configuration options. The UI renders the question inline in chat with clickable option buttons plus an "Other..." free-text fallback. The tool blocks until the user answers, then returns their selection as the tool_result text. Do NOT use for: yes/no confirmations of risky actions (those are handled by the permission modal), one-off questions where a plain text reply is enough, questions during long autonomous runs where blocking is bad UX.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The full question text shown to the user. Be specific. End with a question mark.' },
+        options: {
+          type: 'array',
+          minItems: 2,
+          maxItems: 4,
+          description: '2-4 mutually exclusive answer options. Each option has a short label (1-5 words) and an optional one-line description explaining the choice or its tradeoff.',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'Short user-facing choice text. 1-5 words.' },
+              description: { type: 'string', description: 'Optional one-line explanation of what this option means or its tradeoff.' }
+            },
+            required: ['label']
+          }
+        }
+      },
+      required: ['question', 'options']
+    }
   }
 ];
 

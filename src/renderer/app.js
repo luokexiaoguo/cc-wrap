@@ -842,6 +842,110 @@ function setupEvents() {
     if (!appendToolCallIncremental(tc)) renderMessages();
   });
 
+  // AskUserQuestion — 在工具卡片内渲染选择题界面
+  window.api.on('agent-question', function(data) {
+    var messagesEl = $('messages');
+    if (!messagesEl) return;
+    // 找最后一个 running 状态的 AskUserQuestion 工具卡片
+    var toolCalls = messagesEl.querySelectorAll('.tool-call[data-tc-id]');
+    var target = null;
+    for (var i = toolCalls.length - 1; i >= 0; i--) {
+      var tc = toolCalls[i];
+      var nameEl = tc.querySelector('.tool-call-name');
+      if (nameEl && nameEl.textContent === 'AskUserQuestion' && tc.classList.contains('running')) {
+        target = tc; break;
+      }
+    }
+    if (!target) return;
+
+    var body = target.querySelector('.tool-call-body');
+    if (!body) return;
+
+    // 移除已有的 question UI（重复触发时重建）
+    var existing = body.querySelector('.tool-call-question');
+    if (existing) existing.remove();
+
+    var qDiv = document.createElement('div');
+    qDiv.className = 'tool-call-question';
+
+    // 题面
+    var qText = document.createElement('div');
+    qText.className = 'question-text';
+    qText.textContent = data.question || '';
+    qDiv.appendChild(qText);
+
+    // 选项容器
+    var optsDiv = document.createElement('div');
+    optsDiv.className = 'question-options';
+
+    var makeChoice = function(label) {
+      return function() {
+        optsDiv.querySelectorAll('.q-option').forEach(function(b) { b.classList.remove('selected'); });
+        // CSS 属性选择器中双引号需要反斜杠转义
+        var safeLabel = label.replace(/"/g, '\\"');
+        var match = optsDiv.querySelectorAll('.q-option[data-label="' + safeLabel + '"]');
+        for (var k = 0; k < match.length; k++) match[k].classList.add('selected');
+        optsDiv.querySelectorAll('.q-option').forEach(function(b) { b.disabled = true; });
+        var otherInput = optsDiv.querySelector('.q-other-input');
+        if (otherInput) otherInput.disabled = true;
+        window.api.send('agent-question-response', data.requestId, label);
+      };
+    };
+
+    if (data.options && data.options.length > 0) {
+      data.options.forEach(function(opt) {
+        var btn = document.createElement('button');
+        btn.className = 'q-option';
+        btn.setAttribute('data-label', opt.label);
+        if (opt.description) {
+          btn.innerHTML = '<span class="q-opt-label">' + esc(opt.label) + '</span><span class="q-opt-desc">' + esc(opt.description) + '</span>';
+        } else {
+          btn.textContent = opt.label;
+        }
+        btn.onclick = makeChoice(opt.label);
+        optsDiv.appendChild(btn);
+      });
+    }
+
+    // "Other..." 自由输入
+    var otherDiv = document.createElement('div');
+    otherDiv.className = 'q-other';
+    var otherInput = document.createElement('input');
+    otherInput.type = 'text';
+    otherInput.className = 'q-other-input';
+    otherInput.placeholder = 'Other... 自定义输入';
+    var otherBtn = document.createElement('button');
+    otherBtn.className = 'q-option q-other-submit';
+    otherBtn.textContent = '提交';
+    otherBtn.disabled = true;
+    otherInput.oninput = function() {
+      otherBtn.disabled = !otherInput.value.trim();
+    };
+    otherInput.onkeydown = function(e) {
+      if (e.key === 'Enter' && otherInput.value.trim()) {
+        otherBtn.click();
+      }
+    };
+    otherBtn.onclick = function() {
+      var val = otherInput.value.trim();
+      if (!val) return;
+      optsDiv.querySelectorAll('.q-option').forEach(function(b) { b.disabled = true; });
+      otherInput.disabled = true;
+      otherBtn.disabled = true;
+      var allBtns = optsDiv.querySelectorAll('.q-option');
+      for (var j = 0; j < allBtns.length; j++) {
+        allBtns[j].classList.remove('selected');
+      }
+      window.api.send('agent-question-response', data.requestId, val);
+    };
+    otherDiv.appendChild(otherInput);
+    otherDiv.appendChild(otherBtn);
+    optsDiv.appendChild(otherDiv);
+
+    qDiv.appendChild(optsDiv);
+    body.appendChild(qDiv);
+  });
+
   // 工具调用结果 — 增量更新对应工具卡片
   window.api.on('agent-stream-tool-result', function(data) {
     var conv = state.currentConversation;
