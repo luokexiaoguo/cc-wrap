@@ -14,7 +14,7 @@ const INVOKE_CHANNELS = [
   'claude-api', 'claude-api-stream',
   'get-tool-definitions', 'execute-tool',
   'agent-start', 'agent-cancel',
-  'get-memory', 'save-memory', 'delete-memory',
+  'get-memory', 'save-memory',
   'get-skills', 'save-skills', 'read-skill-file',
   'get-mcp-servers', 'save-mcp-servers', 'test-mcp-server',
   'mcp-connect', 'mcp-disconnect', 'mcp-status',
@@ -22,7 +22,9 @@ const INVOKE_CHANNELS = [
   'get-recent-projects', 'add-recent-project',
   'get-app-icon',
   'get-conversations', 'save-conversations',
-  'get-tasks', 'clear-tasks'
+  'get-tasks', 'clear-tasks',
+  'get-logs', 'clear-logs', 'clear-cache',
+  'export-logs'
 ];
 
 const ON_CHANNELS = [

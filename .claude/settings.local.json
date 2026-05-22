@@ -48,7 +48,17 @@
       "Bash(awk *)",
       "Bash(git add *)",
       "Bash(git rm *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git pull *)",
+      "Bash(git stash *)",
+      "Bash(dir *)",
+      "Bash(Get-ChildItem dist *)",
+      "Bash(Select-Object Name, Length)",
+      "Bash(npm version *)",
+      "Read(//c/Users/luoke/AppData/Roaming/cc-wrap/logs/**)",
+      "Read(//c/Users/luoke/AppData/Roaming/cc-wrap/**)",
+      "Read(//c/Users/luoke/AppData/Roaming/cc-wrap/pasted-images/**)"
     ]
   }
 }

@@ -8,6 +8,10 @@ const os = require('os');
 const treeKill = require('tree-kill');
 const { runAgentLoop, cancelAgentLoop, setPersistenceStore } = require('./agent-loop');
 const mcp = require('./mcp-client');
+const logger = require('./logger');
+
+// 尽早安装 console hook（app.getPath 不可用时仅打终端，不写文件）
+logger.initLogger();
 
 // ==================== API Key 加密辅助 ====================
 // 使用 OS 凭据存储加密 API key。存储格式：'enc:' + base64(encrypted)
@@ -291,6 +295,9 @@ function createTray() {
 // ========== IPC 处理 ==========
 
 app.whenReady().then(() => {
+  // 设置日志文件路径（此时 app.getPath 可用）
+  logger.setLogPath(app.getPath('userData'));
+
   createMainWindow();
   createTray();
 
@@ -1049,6 +1056,81 @@ app.whenReady().then(() => {
     return true;
   });
 
+  // ========== 日志 ==========
+
+  ipcMain.handle('get-logs', (event, options) => {
+    const n = (options && options.lines) || 200;
+    const search = (options && options.search) || '';
+    const lines = logger.readLastLines(n, search);
+    return { lines, path: logger.getLogPath() };
+  });
+
+  ipcMain.handle('clear-logs', () => {
+    logger.clearLogs();
+    return { success: true };
+  });
+
+  ipcMain.handle('export-logs', async () => {
+    const logPath = logger.getLogPath();
+    if (!logPath || !fs.existsSync(logPath)) {
+      return { success: false, error: '日志文件不存在' };
+    }
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '导出日志',
+      defaultPath: path.join(os.homedir(), 'cc-wrap-logs-' + new Date().toISOString().slice(0, 10) + '.log'),
+      filters: [{ name: '日志文件', extensions: ['log', 'txt'] }]
+    });
+    if (result.canceled) return { success: false, error: '已取消' };
+    try {
+      fs.copyFileSync(logPath, result.filePath);
+      return { success: true, path: result.filePath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ========== 清除缓存 ==========
+
+  ipcMain.handle('clear-cache', async (event, type) => {
+    const userData = app.getPath('userData');
+    switch (type) {
+      case 'pasted-images': {
+        const imgDir = path.join(userData, 'pasted-images');
+        if (fs.existsSync(imgDir)) {
+          fs.rmSync(imgDir, { recursive: true, force: true });
+          fs.mkdirSync(imgDir, { recursive: true });
+        }
+        break;
+      }
+      case 'conversations': {
+        const convPath = path.join(userData, 'conversations.json');
+        fs.writeFileSync(convPath, '[]', 'utf-8');
+        break;
+      }
+      case 'logs':
+        logger.clearLogs();
+        break;
+      case 'all': {
+        // 清理图片
+        const imgDir = path.join(userData, 'pasted-images');
+        if (fs.existsSync(imgDir)) {
+          fs.rmSync(imgDir, { recursive: true, force: true });
+          fs.mkdirSync(imgDir, { recursive: true });
+        }
+        // 清理对话
+        const convPath = path.join(userData, 'conversations.json');
+        fs.writeFileSync(convPath, '[]', 'utf-8');
+        // 清理日志
+        logger.clearLogs();
+        break;
+      }
+      default:
+        return { success: false, error: '未知类型: ' + type };
+    }
+    console.log('[Cache] 已清理:', type);
+    return { success: true };
+  });
+
   // ========== Agent Loop ==========
 
   ipcMain.handle('agent-start', async (event, options) => {
@@ -1232,21 +1314,11 @@ ${conversationText}
   ipcMain.handle('save-memory', (event, memory) => {
     const memoryDir = app.getPath('userData');
     fs.mkdirSync(memoryDir, { recursive: true });
-    fs.writeFileSync(path.join(memoryDir, 'memory.json'), JSON.stringify(memory, null, 2));
+    const tmpPath = path.join(memoryDir, 'memory.json.tmp');
+    const finalPath = path.join(memoryDir, 'memory.json');
+    fs.writeFileSync(tmpPath, JSON.stringify(memory, null, 2));
+    fs.renameSync(tmpPath, finalPath);
     return true;
-  });
-
-  ipcMain.handle('delete-memory', (event, index) => {
-    const memoryPath = path.join(app.getPath('userData'), 'memory.json');
-    try {
-      const data = JSON.parse(fs.readFileSync(memoryPath, 'utf-8'));
-      if (index >= 0 && index < data.memories.length) {
-        data.memories.splice(index, 1);
-        fs.writeFileSync(memoryPath, JSON.stringify(data, null, 2));
-        return { success: true, memories: data.memories };
-      }
-    } catch {}
-    return { success: false };
   });
 
   // ========== Skills 系统 ==========
@@ -1568,10 +1640,7 @@ ${conversationText}
 
             // 自动连接新增的服务器
             const newServers = mcpData.servers.filter(s => added.includes(s.name));
-            const results = await mcp.connectAllServers(newServers);
-            for (const r of results) {
-              if (r.status === 'connected') mcp.clients.set(r.name, mcp.clients.get(r.name));
-            }
+            await mcp.connectAllServers(newServers);
 
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('mcp-status', mcp.getServerStatuses());

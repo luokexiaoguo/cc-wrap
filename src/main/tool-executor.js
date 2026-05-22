@@ -93,7 +93,7 @@ function edit(input, ctx) {
   const filePath = resolvePath(input.file_path, ctx.workDir);
 
   try {
-    const rawContent = fs.readFileSync(filePath, 'utf-8');
+    const rawContent = readTextSmart(filePath);
     const hasCRLF = rawContent.includes('\r\n');
     // 在规范化的副本上匹配，消除 CRLF/LF 差异
     const normContent = normalizeLineEndings(rawContent);
@@ -179,7 +179,7 @@ function grep(input, ctx) {
         // 跳过超大文件
         const stat = fs.statSync(filePath);
         if (stat.size > 5 * 1024 * 1024) return;
-        const content = fs.readFileSync(filePath, 'utf-8');
+        const content = readTextSmart(filePath);
         const lines = content.split('\n');
         lines.forEach((line, i) => {
           regex.lastIndex = 0;

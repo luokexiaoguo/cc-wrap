@@ -11,6 +11,7 @@ var I18N = {
     useTools: '使用工具', streamMode: '流式响应', stopHint: '停止生成 (Escape)',
     settings: '设置', memory: '记忆', mcp: 'MCP', skills: 'Skills',
     tabConversations: '对话', tabFiles: '文件',
+    openFolder: '打开文件夹', noDir: '未选择目录', newFile: '+ 文件', newFolder: '+ 文件夹', collapseAll: '− 全部',
     // 设置国际化
     apiConfig: 'API配置', themeSettings: '主题设置', generalSettings: '通用设置',
     globalConfig: '全局配置', apiKeyLabel: '全局 API 密钥（Claude 模型使用）',
@@ -26,12 +27,21 @@ var I18N = {
     // 通用
     langLabel: '界面语言 / Language', workDir: '工作目录', selectDir: '选择',
     allowedTools: '允许的工具',
+    // 日志
+    logs: '日志', logViewer: '日志查看', logSearch: '搜索日志...',
+    refreshLogs: '刷新', clearLogs: '清空日志', logsCleared: '日志已清空',
+    noLogs: '暂无日志', logsPath: '日志文件路径', exportLogs: '导出日志',
+    // 缓存
+    clearCache: '清理缓存', cacheCleared: '缓存已清理',
+    clearPastedImages: '清理粘贴的图片', clearConversations: '清理对话历史',
+    clearAllCache: '清理所有缓存', clearConfirm: '确定要清理吗？此操作不可撤销。',
   },
   en: {
     newChat: 'New Chat', exportBtn: 'Export', sendPlaceholder: 'Type a message... (Enter to send, Ctrl+V paste image)',
     useTools: 'Tools', streamMode: 'Streaming', stopHint: 'Stop (Escape)',
     settings: 'Settings', memory: 'Memory', mcp: 'MCP', skills: 'Skills',
     tabConversations: 'Chat', tabFiles: 'Files',
+    openFolder: 'Open Folder', noDir: 'No directory', newFile: '+ File', newFolder: '+ Folder', collapseAll: '− All',
     // Settings i18n
     apiConfig: 'API Configuration', themeSettings: 'Theme Settings', generalSettings: 'General',
     globalConfig: 'Global Configuration', apiKeyLabel: 'Global API Key (used by Claude models)',
@@ -47,6 +57,14 @@ var I18N = {
     // General
     langLabel: 'Interface Language', workDir: 'Working Directory', selectDir: 'Select',
     allowedTools: 'Allowed Tools',
+    // Logs
+    logs: 'Logs', logViewer: 'Log Viewer', logSearch: 'Search logs...',
+    refreshLogs: 'Refresh', clearLogs: 'Clear Logs', logsCleared: 'Logs cleared',
+    noLogs: 'No logs yet', logsPath: 'Log file path', exportLogs: 'Export Logs',
+    // Cache
+    clearCache: 'Clear Cache', cacheCleared: 'Cache cleared',
+    clearPastedImages: 'Clear Pasted Images', clearConversations: 'Clear Conversations',
+    clearAllCache: 'Clear All Cache', clearConfirm: 'Are you sure? This action cannot be undone.',
   }
 };
 function t(key) {
@@ -68,9 +86,11 @@ function applyLanguage() {
   var streamLabel = document.querySelector('label[for="streamMode"]') || $('streamMode')?.parentElement;
   if (streamLabel) streamLabel.childNodes[streamLabel.childNodes.length - 1].textContent = ' ' + t('streamMode');
   el = $('stopBtn'); if (el) el.title = t('stopHint');
-  document.querySelectorAll('.tab-btn').forEach(function(btn, i) {
-    if (i === 0) btn.textContent = t('tabConversations');
-    else if (i === 1) btn.textContent = t('tabFiles');
+  document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    var tab = btn.getAttribute('data-tab');
+    if (tab === 'conversations') btn.textContent = t('tabConversations');
+    else if (tab === 'files') btn.textContent = t('tabFiles');
+    else if (tab === 'skills') btn.textContent = t('skills');
   });
   // 设置 tab 标签
   document.querySelectorAll('.stab').forEach(function(btn) {
@@ -78,7 +98,14 @@ function applyLanguage() {
     if (tab === 'api') btn.textContent = t('apiConfig');
     else if (tab === 'theme') btn.textContent = t('themeSettings');
     else if (tab === 'general') btn.textContent = t('generalSettings');
+    else if (tab === 'logs') btn.textContent = t('logs');
   });
+  // 文件面板按钮
+  el = $('openFolderBtn'); if (el) el.textContent = t('openFolder');
+  el = $('currentDir'); if (el && !state.workDir) el.textContent = t('noDir');
+  el = $('newFileBtn'); if (el) el.textContent = t('newFile');
+  el = $('newFolderBtn'); if (el) el.textContent = t('newFolder');
+  el = $('collapseAllBtn'); if (el) el.textContent = t('collapseAll');
 }
 
 // 状态
@@ -2604,7 +2631,7 @@ async function openFileInEditor(fullPath, fileName) {
     }
   }
 
-  var isText = isTextFile(fileName) || true; // 未知扩展名也允许当文本编辑（用户可关掉）
+  var isText = isTextFile(fileName);
   state.openFiles.push({
     name: fileName,
     path: fullPath,
@@ -3478,6 +3505,7 @@ function renderSettingsTab(tab) {
         window.api.invoke('set-config', 'language', lang);
         state.config.language = lang;
         showToast(lang === 'zh' ? '已切换到中文' : 'Switched to English');
+        applyLanguage();
         renderSettingsTab('general');
       };
     });
@@ -3489,6 +3517,102 @@ function renderSettingsTab(tab) {
         await window.api.invoke('set-config', 'customSystemPrompt', val);
         state.config.customSystemPrompt = val;
         showToast('自定义提示词已保存，下次对话生效', 'success');
+      };
+    }
+
+    // 清除缓存
+    var cacheSection = document.createElement('div');
+    cacheSection.style.cssText = 'border-top:1px solid var(--border);padding-top:16px;margin-top:16px';
+    cacheSection.innerHTML =
+      '<div style="font-size:13px;font-weight:600;margin-bottom:12px">' + t('clearCache') + '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+        '<button class="btn-sm" id="clearImagesBtn" style="border-color:var(--accent-red);color:var(--accent-red)">' + t('clearPastedImages') + '</button>' +
+        '<button class="btn-sm" id="clearConversationsBtn" style="border-color:var(--accent-red);color:var(--accent-red)">' + t('clearConversations') + '</button>' +
+        '<button class="btn-sm" id="clearAllCacheBtn" style="border-color:var(--accent-red);color:var(--accent-red)">' + t('clearAllCache') + '</button>' +
+      '</div>';
+    content.appendChild(cacheSection);
+
+    function wireClearBtn(id, cacheType) {
+      var btn = $(id);
+      if (!btn) return;
+      btn.onclick = async function() {
+        if (!confirm(t('clearConfirm'))) return;
+        await window.api.invoke('clear-cache', cacheType);
+        if (cacheType === 'conversations' || cacheType === 'all') {
+          state.conversations = [];
+          state.currentConversation = null;
+          renderConversations();
+          renderChat();
+        }
+        showToast(t('cacheCleared'), 'success');
+      };
+    }
+    wireClearBtn('clearImagesBtn', 'pasted-images');
+    wireClearBtn('clearConversationsBtn', 'conversations');
+    wireClearBtn('clearAllCacheBtn', 'all');
+
+  } else if (tab === 'logs') {
+    content.innerHTML =
+      '<div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">' +
+        '<input id="logSearchInput" type="text" placeholder="' + t('logSearch') + '" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-primary);color:var(--text-primary);font-size:13px;outline:none" />' +
+        '<button class="btn-sm" id="refreshLogsBtn">' + t('refreshLogs') + '</button>' +
+        '<button class="btn-sm" id="exportLogsBtn">' + t('exportLogs') + '</button>' +
+        '<button class="btn-sm" id="clearLogsBtn" style="border-color:var(--accent-red);color:var(--accent-red)">' + t('clearLogs') + '</button>' +
+      '</div>' +
+      '<pre id="logViewer" style="' +
+        'background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);' +
+        'padding:12px;font-family:var(--font-mono);font-size:11px;line-height:1.5;' +
+        'overflow:auto;height:420px;white-space:pre-wrap;word-break:break-all;margin:0' +
+      '">' + t('noLogs') + '</pre>' +
+      '<div style="margin-top:4px;font-size:11px;color:var(--text-secondary)">' +
+        t('logsPath') + ': <span id="logsPathDisplay"></span>' +
+      '</div>';
+
+    async function loadLogs(search) {
+      var viewer = $('logViewer');
+      if (!viewer) return;
+      var result = await window.api.invoke('get-logs', { lines: 500, search: search || '' });
+      if (result && result.lines && result.lines.length > 0) {
+        viewer.textContent = result.lines.join('\n');
+        viewer.scrollTop = viewer.scrollHeight;
+      } else {
+        viewer.textContent = t('noLogs');
+      }
+      var pathDisplay = $('logsPathDisplay');
+      if (pathDisplay && result && result.path) pathDisplay.textContent = result.path;
+    }
+
+    loadLogs();
+
+    var refreshBtn = $('refreshLogsBtn');
+    if (refreshBtn) refreshBtn.onclick = function() {
+      loadLogs($('logSearchInput') ? $('logSearchInput').value : '');
+    };
+
+    var clearBtn = $('clearLogsBtn');
+    if (clearBtn) clearBtn.onclick = async function() {
+      if (!confirm(t('clearConfirm'))) return;
+      await window.api.invoke('clear-logs');
+      showToast(t('logsCleared'), 'success');
+      loadLogs();
+    };
+
+    var exportBtn = $('exportLogsBtn');
+    if (exportBtn) exportBtn.onclick = async function() {
+      var result = await window.api.invoke('export-logs');
+      if (result && result.success) {
+        showToast('日志已导出: ' + result.path, 'success');
+      } else if (result && result.error) {
+        showToast('导出失败: ' + result.error, 'error');
+      }
+    };
+
+    var searchInput = $('logSearchInput');
+    if (searchInput) {
+      var searchTimer = null;
+      searchInput.oninput = function() {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(function() { loadLogs(searchInput.value); }, 300);
       };
     }
   }

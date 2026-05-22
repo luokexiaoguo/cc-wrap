@@ -61,6 +61,8 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 
 `tools.js` exports pure data + helpers (`getEnabledTools`, `mergeTools`, `getOpenAITools`). `tool-executor.js` contains the implementations, dispatched via `TOOL_HANDLERS` map. `executeTool()` checks built-in handlers first, falls back to MCP handlers from `mcp-client.getMcpToolHandler`.
 
+**AskUserQuestion** is a special tool that pauses the agent loop to ask the user a multiple-choice question. The handler in `tool-executor.js` sends an `agent-question` IPC to the renderer, then returns a Promise that resolves when the user responds via `agent-question-response` IPC. The renderer (`app.js`) listens for `agent-question`, finds the last running `AskUserQuestion` tool card in the DOM, and injects a `.tool-call-question` div with option buttons + "Other..." text input. On selection, it sends the answer back via `window.api.send('agent-question-response', requestId, answer)`. The handler supports cancellation via `ctx.signal` and a 10-minute timeout. IPC channels: `agent-question` (ON_CHANNELS) + `agent-question-response` (SEND_CHANNELS).
+
 **Read tool encoding handling** (`readTextSmart` in `tool-executor.js`, mirrored in `main.js` as `readTextWithDetectedEncoding`): detects UTF-8 BOM → UTF-16 LE/BE BOM → strict UTF-8 → GBK (Windows ANSI fallback via `iconv-lite`) → latin1. Edit/Grep still hard-code utf-8 (safe — non-UTF-8 read yields garbled string, Edit match then fails harmlessly).
 
 **Bash** uses `spawn` (non-blocking, `tree-kill` on cancel). Shell defaults to `process.env.COMSPEC`; can be overridden via `executeTool` context `shell` param.
@@ -105,7 +107,7 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 
 ## UI conventions
 
-- **Theme**: Claude warm palette. Dark `#1f1a15`, light `#f5f1eb`. Accent `#d97757` (orange). Variables `--bg-*`, `--text-*`, `--accent*`, `--shadow-*`, `--radius-*`, `--font-sans/serif/mono`. Headings use Serif (`Source Serif Pro` fallback); body uses Inter + system Chinese stack; code uses JetBrains Mono.
+- **Theme**: Claude warm palette. Dark `#1f1a15`, light `#f5f1eb`. Accent `#d97757` (orange). Variables `--bg-*`, `--text-*`, `--accent*`, `--accent-bg` (selected-state background), `--shadow-*`, `--radius-*`, `--font-sans/serif/mono`. Headings use Serif (`Source Serif Pro` fallback); body uses Inter + system Chinese stack; code uses JetBrains Mono.
 - **Font size**: chat content reads `var(--chat-font-size)` (default 14px). `applyFontSize(px)` sets this on `documentElement`; slider in Settings > Theme persists to `config.fontSize`.
 - **i18n**: `I18N` object in `app.js` with `zh`/`en` keys, `t(key)` lookup, `applyLanguage()` for dynamic UI updates. When applying language to a button with icon (`.footer-icon` + `.footer-label`), only set `.footer-label` text — `el.textContent = t(...)` would wipe the icon.
 - **Toast** (`showToast(msg, type?, duration?)`): `type` ∈ `success` / `error` / `warning` / `info` controls left-border color + icon. Error toasts last 6s, warning 5s, default 3.5s.
