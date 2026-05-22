@@ -1,18 +1,60 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeImage, shell, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeImage, shell, Tray, Menu, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { execSync, spawn } = require('child_process');
+const iconv = require('iconv-lite');
+const { exec, spawn } = require('child_process');
 const Store = require('electron-store');
 const os = require('os');
-const { runAgentLoop, cancelAgentLoop } = require('./agent-loop');
+const treeKill = require('tree-kill');
+const { runAgentLoop, cancelAgentLoop, setPersistenceStore } = require('./agent-loop');
 const mcp = require('./mcp-client');
+
+// ==================== API Key 加密辅助 ====================
+// 使用 OS 凭据存储加密 API key。存储格式：'enc:' + base64(encrypted)
+// 解密失败时回退到明文（兼容旧数据，下次写入会自动加密）
+
+const ENC_PREFIX = 'enc:';
+
+function encryptKey(plain) {
+  if (!plain) return '';
+  if (!safeStorage.isEncryptionAvailable()) return plain;
+  try {
+    return ENC_PREFIX + safeStorage.encryptString(plain).toString('base64');
+  } catch {
+    return plain;
+  }
+}
+
+function decryptKey(stored) {
+  if (!stored) return '';
+  if (typeof stored !== 'string') return '';
+  if (!stored.startsWith(ENC_PREFIX)) return stored; // 旧明文数据
+  if (!safeStorage.isEncryptionAvailable()) return '';
+  try {
+    return safeStorage.decryptString(Buffer.from(stored.slice(ENC_PREFIX.length), 'base64'));
+  } catch {
+    return '';
+  }
+}
+
+// 读取已解密的完整配置（主进程内部使用）
+function readDecryptedConfig(store) {
+  const raw = store.store;
+  return {
+    ...raw,
+    apiKey: raw.apiKey ? decryptKey(raw.apiKey) : '',
+    models: Array.isArray(raw.models)
+      ? raw.models.map(m => ({ ...m, apiKey: m.apiKey ? decryptKey(m.apiKey) : '' }))
+      : []
+  };
+}
 
 // 配置存储
 const store = new Store({
   defaults: {
     apiKey: '',
     apiEndpoint: 'https://api.anthropic.com',
-    defaultModel: 'claude-3-opus-20240229',
+    defaultModel: '',
     models: [],
     theme: 'dark',
     fontSize: 14,
@@ -21,31 +63,51 @@ const store = new Store({
     temperature: 0.7,
     workDirectory: os.homedir(),
     recentProjects: [],
-    minimizeToTray: true
+    minimizeToTray: true,
+    chatPaneWidth: 460,
+    chatPaneHidden: false,
+    alwaysAllowedTools: [],
+    customSystemPrompt: '',
+    windowBounds: null
   }
 });
+
+// 把 store 注入 agent-loop，让它能持久化 alwaysAllowedTools
+setPersistenceStore(store);
 
 let mainWindow;
 
 // ========== 工具函数 ==========
 
-function getAllFiles(dir, files = []) {
-  try {
-    const items = fs.readdirSync(dir);
+const EXCLUDED_DIRS = new Set([
+  'node_modules', '__pycache__', 'dist', 'build', '.next', '.cache',
+  '.venv', 'venv', 'target', '.gradle', '.idea', '.vscode'
+]);
+const MAX_TREE_DEPTH = 10;
+const MAX_TREE_FILES = 5000;
+
+async function getAllFiles(dir) {
+  const files = [];
+  async function walk(current, depth) {
+    if (depth > MAX_TREE_DEPTH || files.length >= MAX_TREE_FILES) return;
+    let items;
+    try { items = await fs.promises.readdir(current, { withFileTypes: true }); }
+    catch { return; }
     for (const item of items) {
-      if (item.startsWith('.') || item === 'node_modules' || item === '__pycache__') continue;
-      const fullPath = path.join(dir, item);
-      try {
-        const stat = fs.statSync(fullPath);
-        if (stat.isDirectory()) {
-          files.push({ name: item, path: fullPath, type: 'directory' });
-          getAllFiles(fullPath, files);
-        } else {
-          files.push({ name: item, path: fullPath, type: 'file', size: stat.size });
-        }
-      } catch (e) {}
+      if (files.length >= MAX_TREE_FILES) return;
+      if (item.name.startsWith('.') || EXCLUDED_DIRS.has(item.name)) continue;
+      const fullPath = path.join(current, item.name);
+      if (item.isDirectory()) {
+        files.push({ name: item.name, path: fullPath, type: 'directory' });
+        await walk(fullPath, depth + 1);
+      } else if (item.isFile()) {
+        let size = 0;
+        try { size = (await fs.promises.stat(fullPath)).size; } catch {}
+        files.push({ name: item.name, path: fullPath, type: 'file', size });
+      }
     }
-  } catch (e) {}
+  }
+  await walk(dir, 0);
   return files;
 }
 
@@ -121,7 +183,9 @@ function globFiles(dir, pattern) {
 // ========== 主窗口 ==========
 
 function createMainWindow() {
-  mainWindow = new BrowserWindow({
+  // 恢复上次窗口位置/大小
+  const savedBounds = store.get('windowBounds', null);
+  const winOpts = {
     width: 1400,
     height: 900,
     minWidth: 1000,
@@ -136,8 +200,23 @@ function createMainWindow() {
       enableRemoteModule: false,
       preload: path.join(__dirname, '../preload.js')
     },
-    backgroundColor: '#0d1117'
-  });
+    backgroundColor: '#1f1a15'
+  };
+  if (savedBounds && savedBounds.width && savedBounds.height) {
+    Object.assign(winOpts, savedBounds);
+  }
+  mainWindow = new BrowserWindow(winOpts);
+
+  // 关闭前保存窗口位置/大小
+  const saveBounds = () => {
+    try {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMinimized() && !mainWindow.isMaximized()) {
+        store.set('windowBounds', mainWindow.getBounds());
+      }
+    } catch (_) {}
+  };
+  mainWindow.on('resize', saveBounds);
+  mainWindow.on('move', saveBounds);
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   mainWindow.setMenu(null);
@@ -215,16 +294,37 @@ app.whenReady().then(() => {
   createMainWindow();
   createTray();
 
-  // 配置相关
-  ipcMain.handle('get-config', () => store.store);
-  ipcMain.handle('set-config', (event, key, value) => { store.set(key, value); return true; });
+  // 配置相关（API key 字段在读出时解密、写入时加密）
+  ipcMain.handle('get-config', () => {
+    const raw = store.store;
+    const decrypted = { ...raw };
+    if (raw.apiKey) decrypted.apiKey = decryptKey(raw.apiKey);
+    if (Array.isArray(raw.models)) {
+      decrypted.models = raw.models.map(m => ({
+        ...m,
+        apiKey: m.apiKey ? decryptKey(m.apiKey) : ''
+      }));
+    }
+    return decrypted;
+  });
+  ipcMain.handle('set-config', (event, key, value) => {
+    if (key === 'apiKey') {
+      store.set(key, encryptKey(value));
+    } else if (key === 'models' && Array.isArray(value)) {
+      store.set(key, value.map(m => ({ ...m, apiKey: m.apiKey ? encryptKey(m.apiKey) : '' })));
+    } else {
+      store.set(key, value);
+    }
+    return true;
+  });
 
-  // 返回应用图标（缩放到 20x20 的 data URL）
-  ipcMain.handle('get-app-icon', () => {
+  // 返回应用图标 data URL（可选 size，默认 20x20，向后兼容）
+  ipcMain.handle('get-app-icon', (event, size) => {
     const iconPath = path.join(__dirname, '../../icon.ico');
     try {
       const img = nativeImage.createFromPath(iconPath);
-      return img.resize({ width: 20, height: 20 }).toDataURL();
+      const px = (size && size > 0 && size <= 512) ? size : 20;
+      return img.resize({ width: px, height: px, quality: 'best' }).toDataURL();
     } catch (e) {
       return null;
     }
@@ -238,27 +338,79 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('window-close', () => mainWindow.close());
 
-  // 模型管理
-  ipcMain.handle('get-models', () => store.get('models', []));
+  // 模型管理（每个模型的 apiKey 都加密存储）
+  ipcMain.handle('get-models', () => {
+    const models = store.get('models', []);
+    return models.map(m => ({ ...m, apiKey: m.apiKey ? decryptKey(m.apiKey) : '' }));
+  });
   ipcMain.handle('add-model', (event, model) => {
     const models = store.get('models', []);
-    models.push(model);
+    const enc = { ...model, apiKey: model.apiKey ? encryptKey(model.apiKey) : '' };
+    models.push(enc);
     store.set('models', models);
-    return models;
+    return models.map(m => ({ ...m, apiKey: m.apiKey ? decryptKey(m.apiKey) : '' }));
   });
   ipcMain.handle('remove-model', (event, index) => {
     const models = store.get('models', []);
     models.splice(index, 1);
     store.set('models', models);
-    return models;
+    return models.map(m => ({ ...m, apiKey: m.apiKey ? decryptKey(m.apiKey) : '' }));
   });
 
   // ========== Claude Code 工具：文件操作 ==========
 
+  // 读文件 + 自动识别编码（UTF-8 BOM / UTF-16 LE/BE / 严格 UTF-8 / GBK 兜底）
+  function readTextWithDetectedEncoding(filePath) {
+    const buf = fs.readFileSync(filePath);
+    // BOM 检测
+    if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
+      return { content: buf.slice(3).toString('utf-8'), encoding: 'utf-8-bom' };
+    }
+    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+      return { content: iconv.decode(buf.slice(2), 'utf-16le'), encoding: 'utf-16le' };
+    }
+    if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+      return { content: iconv.decode(buf.slice(2), 'utf-16be'), encoding: 'utf-16be' };
+    }
+    // 无 BOM：严格 UTF-8 验证
+    try {
+      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+      return { content: decoded, encoding: 'utf-8' };
+    } catch (_) {
+      // 解码失败 → 试 GBK（中文 Windows ANSI）
+      try {
+        const gbk = iconv.decode(buf, 'gbk');
+        // 简单校验：GBK 解码不会抛错，但要剔除明显失败的情况
+        return { content: gbk, encoding: 'gbk' };
+      } catch (_) {
+        // 都不行 → latin1 兜底
+        return { content: buf.toString('latin1'), encoding: 'latin1' };
+      }
+    }
+  }
+
   ipcMain.handle('tool-read', (event, filePath) => {
     try {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      return { success: true, content };
+      const { content, encoding } = readTextWithDetectedEncoding(filePath);
+      return { success: true, content, encoding };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // 读文件为 data URL（用于编辑器的图片预览）
+  ipcMain.handle('read-file-as-data-url', (event, filePath) => {
+    try {
+      const buf = fs.readFileSync(filePath);
+      const ext = path.extname(filePath).slice(1).toLowerCase();
+      const mimeMap = {
+        png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+        gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+        ico: 'image/x-icon', svg: 'image/svg+xml', avif: 'image/avif'
+      };
+      const mime = mimeMap[ext] || 'application/octet-stream';
+      const dataUrl = 'data:' + mime + ';base64,' + buf.toString('base64');
+      return { success: true, dataUrl };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -326,23 +478,20 @@ app.whenReady().then(() => {
 
   ipcMain.handle('tool-bash', (event, command, cwd) => {
     return new Promise((resolve) => {
-      try {
-        const workDir = cwd || store.get('workDirectory');
-        execSync(command, {
-          cwd: workDir,
-          encoding: 'utf-8',
-          timeout: 60000,
-          maxBuffer: 1024 * 1024 * 10
-        }, (error, stdout, stderr) => {
-          if (error) {
-            resolve({ success: false, output: stderr || error.message });
-          } else {
-            resolve({ success: true, output: stdout });
-          }
-        });
-      } catch (err) {
-        resolve({ success: false, output: err.message });
-      }
+      const workDir = cwd || store.get('workDirectory');
+      exec(command, {
+        cwd: workDir,
+        encoding: 'utf-8',
+        timeout: 60000,
+        maxBuffer: 1024 * 1024 * 10,
+        windowsHide: true,
+      }, (error, stdout, stderr) => {
+        if (error) {
+          resolve({ success: false, output: (stdout || '') + (stderr ? '\n' + stderr : '') || error.message });
+        } else {
+          resolve({ success: true, output: stdout || stderr || '' });
+        }
+      });
     });
   });
 
@@ -382,11 +531,11 @@ app.whenReady().then(() => {
 
   // ========== Claude Code 工具：文件树 ==========
 
-  ipcMain.handle('get-file-tree', (event, dir) => {
+  ipcMain.handle('get-file-tree', async (event, dir) => {
     try {
       const workDir = dir || store.get('workDirectory');
-      const files = getAllFiles(workDir);
-      return { success: true, files, root: workDir };
+      const files = await getAllFiles(workDir);
+      return { success: true, files, root: workDir, truncated: files.length >= MAX_TREE_FILES };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -431,12 +580,90 @@ app.whenReady().then(() => {
     return null;
   });
 
+  // 通用附件选择：支持多选 + 图片/PDF/文本类
+  ipcMain.handle('pick-attachments', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      filters: [
+        { name: '所有支持的文件', extensions: ['jpg','jpeg','png','gif','webp','bmp','avif','pdf','txt','md','json','csv','xml','yml','yaml','log','html','htm','css','js','ts','tsx','jsx','py','java','c','cpp','h','go','rs','rb','sh','bash','ini','toml','sql'] },
+        { name: '图片', extensions: ['jpg','jpeg','png','gif','webp','bmp','avif'] },
+        { name: 'PDF', extensions: ['pdf'] },
+        { name: '文本/代码', extensions: ['txt','md','json','csv','xml','yml','yaml','log','html','css','js','ts','py','java','c','cpp','go','rs','rb','sh','sql','ini','toml'] },
+        { name: '所有文件', extensions: ['*'] }
+      ],
+      properties: ['openFile', 'multiSelections']
+    });
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) return [];
+
+    const IMG_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','avif']);
+    const TEXT_EXTS = new Set(['txt','md','json','csv','xml','yml','yaml','log','html','htm','css','js','ts','tsx','jsx','py','java','c','cpp','h','go','rs','rb','sh','bash','ini','toml','sql','conf','env']);
+    const MAX_TEXT_BYTES = 256 * 1024; // 最多内联 256KB 文本，超过给路径 hint
+    const out = [];
+    for (const fp of result.filePaths) {
+      try {
+        const stat = fs.statSync(fp);
+        const ext = path.extname(fp).slice(1).toLowerCase();
+        const name = path.basename(fp);
+        if (IMG_EXTS.has(ext)) {
+          const buf = fs.readFileSync(fp);
+          out.push({
+            kind: 'image',
+            name,
+            path: fp,
+            size: stat.size,
+            mediaType: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+            data: buf.toString('base64'),
+          });
+        } else if (ext === 'pdf') {
+          out.push({ kind: 'pdf', name, path: fp, size: stat.size });
+        } else if (TEXT_EXTS.has(ext) || stat.size <= 64 * 1024) {
+          // 未知扩展名但 <=64KB 也按文本试读
+          if (stat.size > MAX_TEXT_BYTES) {
+            out.push({ kind: 'other', name, path: fp, size: stat.size });
+          } else {
+            try {
+              const text = require('./tool-executor').readTextSmart
+                ? require('./tool-executor').readTextSmart(fp)
+                : fs.readFileSync(fp, 'utf-8');
+              out.push({ kind: 'text', name, path: fp, size: stat.size, text });
+            } catch (_) {
+              out.push({ kind: 'other', name, path: fp, size: stat.size });
+            }
+          }
+        } else {
+          out.push({ kind: 'other', name, path: fp, size: stat.size });
+        }
+      } catch (err) {
+        console.error('[pick-attachments]', fp, err.message);
+      }
+    }
+    return out;
+  });
+
   ipcMain.handle('paste-image', () => {
     const image = clipboard.readImage();
     if (!image.isEmpty()) {
       return { data: image.toPNG().toString('base64'), mediaType: 'image/png' };
     }
     return null;
+  });
+
+  // 把粘贴/拖拽的 base64 图片落盘到 userData/pasted-images，返回绝对路径
+  // 这样 Claude 调用接受文件路径参数的 MCP 工具（如 understand_image）时能拿到真实路径
+  ipcMain.handle('save-pasted-image', async (event, payload) => {
+    try {
+      if (!payload || !payload.data) return null;
+      const mediaType = payload.mediaType || 'image/png';
+      const ext = mediaType.split('/')[1] || 'png';
+      const dir = path.join(app.getPath('userData'), 'pasted-images');
+      await fs.promises.mkdir(dir, { recursive: true });
+      const filename = `paste-${Date.now()}.${ext}`;
+      const filepath = path.join(dir, filename);
+      await fs.promises.writeFile(filepath, Buffer.from(payload.data, 'base64'));
+      return { path: filepath, mediaType };
+    } catch (err) {
+      console.error('[save-pasted-image] failed:', err);
+      return null;
+    }
   });
 
   // ========== API 调用 ==========
@@ -486,7 +713,7 @@ app.whenReady().then(() => {
   }
 
   ipcMain.handle('claude-api', async (event, messages, options = {}) => {
-    const config = store.store;
+    const config = readDecryptedConfig(store);
     const apiKey = options.apiKey || config.apiKey;
     let endpoint = options.endpoint || config.apiEndpoint || 'https://api.anthropic.com';
     const model = options.model || config.defaultModel || 'claude-3-opus-20240229';
@@ -584,7 +811,7 @@ app.whenReady().then(() => {
 
   // 流式 API 调用
   ipcMain.handle('claude-api-stream', async (event, messages, options = {}) => {
-    const config = store.store;
+    const config = readDecryptedConfig(store);
     const apiKey = options.apiKey || config.apiKey;
     let endpoint = options.endpoint || config.apiEndpoint || 'https://api.anthropic.com';
     const model = options.model || config.defaultModel || 'claude-3-opus-20240229';
@@ -802,17 +1029,30 @@ app.whenReady().then(() => {
 
   ipcMain.handle('execute-tool', async (event, toolName, input) => {
     const { executeTool } = require('./tool-executor');
-    const result = await executeTool(toolName, input);
+    const result = await executeTool(toolName, input, { window: mainWindow });
     if (result.error) {
       return { success: false, error: result.error };
     }
     return { success: true, content: result.content };
   });
 
+  // ========== 任务管理（Plan UI 用） ==========
+
+  ipcMain.handle('get-tasks', () => {
+    const { taskGetAll } = require('./tool-executor');
+    return taskGetAll();
+  });
+
+  ipcMain.handle('clear-tasks', () => {
+    const { taskClearAll } = require('./tool-executor');
+    taskClearAll({ window: mainWindow });
+    return true;
+  });
+
   // ========== Agent Loop ==========
 
   ipcMain.handle('agent-start', async (event, options) => {
-    const config = store.store;
+    const config = readDecryptedConfig(store);
     const loopId = options.loopId || 'loop_' + Date.now();
 
     // 获取 MCP 工具定义
@@ -824,6 +1064,7 @@ app.whenReady().then(() => {
       loopId,
       workDir: options.workDir || config.workDirectory,
       mcpTools,
+      window: mainWindow,
       apiConfig: {
         model: options.model || config.defaultModel,
         apiKey: options.apiKey || config.apiKey,
@@ -947,6 +1188,36 @@ ${conversationText}
     }
   }
 
+  // ========== 对话历史（存到文件，避免 localStorage 的 5MB 限制）==========
+
+  const conversationsPath = () => path.join(app.getPath('userData'), 'conversations.json');
+
+  ipcMain.handle('get-conversations', () => {
+    try {
+      const raw = fs.readFileSync(conversationsPath(), 'utf-8');
+      const data = JSON.parse(raw);
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle('save-conversations', (event, conversations) => {
+    try {
+      const userDataDir = app.getPath('userData');
+      fs.mkdirSync(userDataDir, { recursive: true });
+      // 原子写：先写临时文件再 rename，避免写入过程中应用崩溃导致文件损坏
+      const finalPath = conversationsPath();
+      const tmpPath = finalPath + '.tmp';
+      fs.writeFileSync(tmpPath, JSON.stringify(conversations || []));
+      fs.renameSync(tmpPath, finalPath);
+      return true;
+    } catch (err) {
+      console.error('[Conversations] 保存失败:', err.message);
+      return false;
+    }
+  });
+
   // ========== 记忆系统 ==========
 
   ipcMain.handle('get-memory', () => {
@@ -979,20 +1250,165 @@ ${conversationText}
   });
 
   // ========== Skills 系统 ==========
+  // 来源合并：
+  //   1) %APPDATA%/cc-wrap/skills.json （UI 手添加的）
+  //   2) %APPDATA%/cc-wrap/skills/<name>/SKILL.md  （文件协议，cc-wrap 自己的标准目录）
+  //   3) ~/.claude/skills/<name>/SKILL.md          （兼容 Claude Code 已装的 skill）
+  // 文件型 skill 支持 YAML frontmatter（name/description/triggers/alwaysActive）。
+  function parseFrontmatter(text) {
+    if (!text || !text.startsWith('---')) return { meta: {}, body: text || '' };
+    const end = text.indexOf('\n---', 3);
+    if (end < 0) return { meta: {}, body: text };
+    const header = text.slice(3, end).trim();
+    const body = text.slice(end + 4).replace(/^\r?\n/, '');
+    const meta = {};
+    header.split(/\r?\n/).forEach(line => {
+      const m = line.match(/^([A-Za-z_][\w-]*)\s*:\s*(.+)$/);
+      if (!m) return;
+      const key = m[1].trim();
+      let val = m[2].trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) val = val.slice(1, -1);
+      if (/^\[.*\]$/.test(val)) {
+        try { meta[key] = JSON.parse(val.replace(/'/g, '"')); return; } catch (_) {
+          // JSON.parse 失败时（bare words 如 [image, 图片]），手动分割
+          meta[key] = val.slice(1, -1).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+          return;
+        }
+      }
+      if (val === 'true' || val === 'false') { meta[key] = (val === 'true'); return; }
+      meta[key] = val;
+    });
+    return { meta, body };
+  }
+
+  function scanSkillDir(dir, sourceLabel) {
+    const out = [];
+    try {
+      if (!fs.existsSync(dir)) return out;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        const skillDir = path.join(dir, e.name);
+        const candidates = ['SKILL.md', 'skill.md', 'SKILL.txt'];
+        let mdPath = null;
+        for (const c of candidates) {
+          const p = path.join(skillDir, c);
+          if (fs.existsSync(p)) { mdPath = p; break; }
+        }
+        if (!mdPath) continue;
+        try {
+          const raw = fs.readFileSync(mdPath, 'utf-8');
+          const { meta, body } = parseFrontmatter(raw);
+          out.push({
+            name: meta.name || e.name,
+            description: meta.description || '',
+            content: body,
+            triggers: Array.isArray(meta.triggers) ? meta.triggers : [],
+            alwaysActive: !!meta.alwaysActive,
+            source: sourceLabel,
+            path: mdPath,
+            // 我们自己 InstallSkill 装到 cc-wrap 目录的 skill 允许 UI 管理（toggle/edit/delete）；
+            // ~/.claude/skills/ 是别的工具装的，保持只读避免误改
+            readonly: sourceLabel === 'claude-code',
+          });
+        } catch (err) {
+          console.warn('[skills] skip', mdPath, err.message);
+        }
+      }
+    } catch (err) {
+      console.warn('[skills] scan failed', dir, err.message);
+    }
+    return out;
+  }
+
+  function loadAllSkills() {
+    const userData = app.getPath('userData');
+    // 1) JSON 来源（UI 编辑的，可写）
+    let jsonSkills = [];
+    try {
+      const skillsPath = path.join(userData, 'skills.json');
+      const raw = JSON.parse(fs.readFileSync(skillsPath, 'utf-8'));
+      const arr = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.skills) ? raw.skills : []);
+      jsonSkills = arr.map(s => Object.assign({ source: 'user', readonly: false, alwaysActive: !!s.alwaysActive, triggers: s.triggers || [] }, s));
+    } catch (_) {}
+
+    // 2) cc-wrap 文件目录
+    const ccwrapDir = path.join(userData, 'skills');
+    const fileSkills = scanSkillDir(ccwrapDir, 'cc-wrap');
+
+    // 3) Claude Code 兼容目录
+    const claudeDir = path.join(require('os').homedir(), '.claude', 'skills');
+    const claudeSkills = scanSkillDir(claudeDir, 'claude-code');
+
+    // 合并：JSON > cc-wrap文件 > claude目录（重名以 JSON 优先）
+    const map = new Map();
+    [...claudeSkills, ...fileSkills, ...jsonSkills].forEach(s => {
+      if (!s || !s.name) return;
+      map.set(s.name, s);
+    });
+    return Array.from(map.values());
+  }
 
   ipcMain.handle('get-skills', () => {
-    const skillsPath = path.join(app.getPath('userData'), 'skills.json');
-    try {
-      return JSON.parse(fs.readFileSync(skillsPath, 'utf-8'));
-    } catch {
-      return { skills: [] };
-    }
+    const skills = loadAllSkills();
+    return { skills };
   });
+  // 给主进程其他模块（agent-loop）用
+  global.__loadAllSkills = loadAllSkills;
 
   ipcMain.handle('save-skills', (event, data) => {
     const userDataDir = app.getPath('userData');
     fs.mkdirSync(userDataDir, { recursive: true });
-    fs.writeFileSync(path.join(userDataDir, 'skills.json'), JSON.stringify(data, null, 2));
+    const arr = Array.isArray(data) ? data : (data && Array.isArray(data.skills) ? data.skills : []);
+
+    // 1) JSON 来源（手动添加，非文件型）→ skills.json
+    const writable = arr.filter(s => !s.readonly && s.source !== 'cc-wrap' && s.source !== 'claude-code')
+      .map(s => ({
+        name: s.name,
+        description: s.description || '',
+        content: s.content || '',
+        triggers: Array.isArray(s.triggers) ? s.triggers : [],
+        alwaysActive: !!s.alwaysActive,
+      }));
+    fs.writeFileSync(path.join(userDataDir, 'skills.json'), JSON.stringify(writable, null, 2));
+
+    // 2) cc-wrap 文件来源 → 回写各自的 SKILL.md，且删除已不在列表里的目录
+    const ccwrapDir = path.join(userDataDir, 'skills');
+    const ccwrapSkills = arr.filter(s => s.source === 'cc-wrap' && s.name);
+    for (const s of ccwrapSkills) {
+      try {
+        const skillDir = path.join(ccwrapDir, s.name);
+        fs.mkdirSync(skillDir, { recursive: true });
+        const fm =
+          '---\n' +
+          'name: ' + s.name + '\n' +
+          'description: ' + JSON.stringify(s.description || '') + '\n' +
+          'triggers: ' + JSON.stringify(Array.isArray(s.triggers) ? s.triggers : []) + '\n' +
+          'alwaysActive: ' + (s.alwaysActive ? 'true' : 'false') + '\n' +
+          '---\n\n';
+        const body = (s.content || '').replace(/^---[\s\S]*?\n---\s*\n+/, '');
+        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), fm + body, 'utf-8');
+      } catch (err) {
+        console.warn('[save-skills] 回写 cc-wrap skill 失败', s.name, err.message);
+      }
+    }
+    // 删除已被用户移除的 cc-wrap skill 目录
+    try {
+      if (fs.existsSync(ccwrapDir)) {
+        const keep = new Set(ccwrapSkills.map(s => s.name));
+        for (const entry of fs.readdirSync(ccwrapDir, { withFileTypes: true })) {
+          if (!entry.isDirectory() || keep.has(entry.name)) continue;
+          try {
+            fs.rmSync(path.join(ccwrapDir, entry.name), { recursive: true, force: true });
+            console.log('[save-skills] 已删除 cc-wrap skill 目录:', entry.name);
+          } catch (err) {
+            console.warn('[save-skills] 删除目录失败', entry.name, err.message);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[save-skills] 清理 cc-wrap 目录失败', err.message);
+    }
     return true;
   });
 
@@ -1223,4 +1639,10 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+});
+
+// 应用退出前清理所有 MCP 子进程（防止 Windows 上的进程残留）
+app.on('before-quit', () => {
+  app.isQuitting = true;
+  try { mcp.closeAll(); } catch (e) { console.error('[MCP] 退出清理失败:', e.message); }
 });

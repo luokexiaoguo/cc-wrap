@@ -3,6 +3,8 @@
 
 const { spawn } = require('child_process');
 const readline = require('readline');
+let treeKill = null;
+try { treeKill = require('tree-kill'); } catch {}
 
 const CONNECT_TIMEOUT = 10000;
 const CALL_TIMEOUT = 60000;
@@ -200,10 +202,15 @@ class McpClient {
       p.reject(new Error('MCP 连接已断开'));
     }
     this.pending.clear();
-    // 关闭进程
+    // 关闭进程（Windows 下 shell:true spawn 出的子进程需要 tree-kill 杀干净进程树）
     if (this.process) {
       try { this.process.stdin.end(); } catch {}
-      try { this.process.kill(); } catch {}
+      const pid = this.process.pid;
+      if (treeKill && pid) {
+        try { treeKill(pid, 'SIGKILL'); } catch { try { this.process.kill(); } catch {} }
+      } else {
+        try { this.process.kill(); } catch {}
+      }
       this.process = null;
     }
   }

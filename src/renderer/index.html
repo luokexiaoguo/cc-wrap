@@ -60,8 +60,9 @@
       </div>
 
       <div class="sidebar-footer">
-        <button id="memoryBtn" class="footer-btn">记忆</button>
-        <button id="settingsBtn" class="footer-btn">设置</button>
+        <button id="memoryBtn" class="footer-btn" title="管理记忆"><span class="footer-icon">🧠</span><span class="footer-label">记忆</span></button>
+        <button id="mcpBtn" class="footer-btn" title="管理 MCP 服务器"><span class="footer-icon">🔌</span><span class="footer-label">MCP</span></button>
+        <button id="settingsBtn" class="footer-btn" title="应用设置"><span class="footer-icon">⚙</span><span class="footer-label">设置</span></button>
       </div>
     </aside>
 
@@ -80,6 +81,21 @@
           </div>
         </header>
 
+        <!-- 任务进度面板（Plan UI）：贴 toolbar 下，不参与滚动 -->
+        <div class="task-panel" id="taskPanel" style="display:none">
+          <div class="task-panel-header" id="taskPanelHeader">
+            <span class="task-panel-icon">📋</span>
+            <span class="task-panel-title">任务进度</span>
+            <span class="task-panel-counter" id="taskPanelCounter">0/0</span>
+            <button class="task-panel-clear" id="taskPanelClear" title="清空所有任务">清空</button>
+            <span class="task-panel-toggle" id="taskPanelToggle">▼</span>
+          </div>
+          <div class="task-panel-body" id="taskPanelBody"></div>
+        </div>
+
+        <!-- 主内容区拆分：左侧编辑器，右侧聊天（仅在打开文件时分屏） -->
+        <div class="body-split" id="bodySplit">
+
         <!-- 文件编辑器面板 -->
         <div class="editor-panel" id="editorPanel" style="display:none">
           <div class="editor-tabs" id="editorTabs"></div>
@@ -92,6 +108,7 @@
               </div>
               <button class="btn-sm" id="editorFindBtn" title="Ctrl+F 查找">查找</button>
               <button class="btn-sm" id="editorSave" title="Ctrl+S 保存">保存</button>
+              <button class="btn-sm" id="toggleChatPane" title="隐藏/显示右侧对话">隐藏对话</button>
               <button class="btn-icon" id="editorClose" title="关闭编辑器">✕</button>
             </div>
           </div>
@@ -113,45 +130,71 @@
           </div>
         </div>
 
+        <!-- 聊天 + 输入栏：默认占满主区；编辑器打开时退化为右侧 sidebar -->
+        <div class="chat-pane" id="chatPane">
+
+          <!-- 拖拽分隔条（仅 editor-open 时显示） -->
+          <div class="chat-pane-resizer" id="chatPaneResizer" title="拖拽调整聊天面板宽度"></div>
+
         <div class="chat-area" id="chatArea">
           <div class="welcome-screen" id="welcomeScreen">
             <div class="welcome-content">
-              <h1>cc-wrap</h1>
-              <p>完整集成 Claude Code 所有功能</p>
-              <div class="feature-grid">
-                <div class="feature-item"><span class="fi">📁</span>文件读写编辑</div>
-                <div class="feature-item"><span class="fi">🔍</span>全局搜索</div>
-                <div class="feature-item"><span class="fi">💻</span>Bash命令执行</div>
-                <div class="feature-item"><span class="fi">📋</span>任务管理</div>
-                <div class="feature-item"><span class="fi">🧠</span>记忆系统</div>
-                <div class="feature-item"><span class="fi">🧩</span>Skills扩展</div>
+              <div class="welcome-hero">
+                <img id="welcomeLogo" class="welcome-logo" alt="cc-wrap" />
+                <h1>cc-wrap</h1>
+                <p class="welcome-tagline">Claude Code 桌面端 · 可视化的 Agent 工作台</p>
               </div>
-              <div class="slash-commands">
-                <h3>可用命令</h3>
-                <div class="cmd-list">
-                  <div class="cmd-item"><code>/help</code> 显示帮助</div>
-                  <div class="cmd-item"><code>/clear</code> 清空对话</div>
-                  <div class="cmd-item"><code>/model</code> 切换模型</div>
-                  <div class="cmd-item"><code>/memory</code> 管理记忆</div>
-                  <div class="cmd-item"><code>/skill</code> 引用Skill</div>
-                  <div class="cmd-item"><code>/theme</code> 切换主题</div>
+
+              <div class="welcome-section">
+                <h3>核心能力</h3>
+                <div class="feature-grid">
+                  <div class="feature-item"><span class="fi">📁</span><strong>文件读写编辑</strong><span class="fd">Read · Write · Edit · Glob · Grep</span></div>
+                  <div class="feature-item"><span class="fi">💻</span><strong>Bash 执行</strong><span class="fd">真 spawn，支持取消、超时</span></div>
+                  <div class="feature-item"><span class="fi">📋</span><strong>任务面板</strong><span class="fd">大任务自动拆解，进度可见</span></div>
+                  <div class="feature-item"><span class="fi">🧠</span><strong>记忆系统</strong><span class="fd">跨对话沉淀偏好与项目背景</span></div>
+                  <div class="feature-item"><span class="fi">🧩</span><strong>Skills 扩展</strong><span class="fd">注入领域知识到 system prompt</span></div>
+                  <div class="feature-item"><span class="fi">🔌</span><strong>MCP 集成</strong><span class="fd">外部工具一键接入</span></div>
+                  <div class="feature-item"><span class="fi">🖼️</span><strong>图片识别</strong><span class="fd">粘贴落盘，可调视觉模型或 MCP</span></div>
+                  <div class="feature-item"><span class="fi">🌐</span><strong>多模型</strong><span class="fd">Claude · GPT · DeepSeek · MiniMax · 通义</span></div>
                 </div>
               </div>
+
+              <div class="welcome-section">
+                <h3>斜杠命令</h3>
+                <div class="cmd-list">
+                  <div class="cmd-item"><code>/help</code><span class="cd">查看帮助</span></div>
+                  <div class="cmd-item"><code>/clear</code><span class="cd">清空对话</span></div>
+                  <div class="cmd-item"><code>/model</code><span class="cd">切换模型</span></div>
+                  <div class="cmd-item"><code>/memory</code><span class="cd">管理记忆</span></div>
+                  <div class="cmd-item"><code>/mcp</code><span class="cd">MCP 服务器</span></div>
+                  <div class="cmd-item"><code>/skill</code><span class="cd">引用 Skill</span></div>
+                  <div class="cmd-item"><code>/theme</code><span class="cd">切换主题</span></div>
+                  <div class="cmd-item"><code>/export</code><span class="cd">导出对话</span></div>
+                </div>
+              </div>
+
+              <div class="welcome-hint">💡 提示：粘贴图片（Ctrl+V）、拖入文件、Ctrl+P 快速打开都已支持</div>
             </div>
           </div>
           <div class="messages" id="messages"></div>
+          <!-- 滚动到底部浮动按钮：当用户上翻看历史时显示 -->
+          <button class="scroll-to-bottom" id="scrollBottomBtn" style="display:none" title="滚动到底部 (End)">↓</button>
         </div>
 
         <div class="input-area">
-          <div class="attachment-preview" id="attachmentPreview" style="display:none">
-            <img id="previewImage" src="" alt="预览" />
-            <button id="removeAttachment" class="btn-remove">✕</button>
+          <!-- 思考/工具调用状态条 -->
+          <div class="thinking-indicator" id="thinkingIndicator" style="display:none">
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+            <span class="thinking-label" id="thinkingLabel">思考中...</span>
           </div>
+          <div class="attachment-preview" id="attachmentPreview" style="display:none"></div>
           <div class="command-autocomplete" id="commandAutocomplete" style="display:none"></div>
           <div class="input-wrapper">
             <textarea id="messageInput" placeholder="输入消息... (Enter 发送, Ctrl+V 粘贴图片)" rows="1"></textarea>
             <div class="input-actions">
-              <button id="attachBtn" class="btn-attach" title="上传图片/附件">📎</button>
+              <button id="attachBtn" class="btn-attach" title="上传附件（图片 / PDF / 文本 / 代码 …，支持多选）">📎</button>
               <button id="sendBtn" class="btn-send"><span class="send-icon">➤</span></button>
               <button id="stopBtn" class="btn-stop" style="display:none" title="停止生成 (Escape)">⏹</button>
             </div>
@@ -161,6 +204,8 @@
             <label class="checkbox-item"><input type="checkbox" id="streamMode" checked /> 流式响应</label>
           </div>
         </div>
+        </div><!-- /.chat-pane -->
+        </div><!-- /.body-split -->
       </main>
 
     </div>
@@ -269,19 +314,53 @@
           <button id="closeMcp" class="btn-icon">✕</button>
         </div>
         <div class="modal-body">
-          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
-            MCP (Model Context Protocol) 服务器可以扩展 Claude 的工具能力。添加后，Claude 可以调用服务器提供的自定义工具。
+          <div class="mcp-intro">
+            <strong>什么是 MCP？</strong> Model Context Protocol — 模型上下文协议。本质：cc-wrap 拉起一个外部进程（你下面填的"启动命令"），用 stdin/stdout 跟它说 JSON-RPC，把它提供的工具暴露给模型用。
           </div>
+
+          <details class="mcp-help">
+            <summary>📖 如何添加？三个常用示例（点击展开）</summary>
+            <div class="mcp-help-body">
+              <div class="mcp-example">
+                <div class="mcp-example-title">① MiniMax · 识图/语音/绘图（需要 <code>uv</code>，没有就 <code>pip install uv</code>）</div>
+                <pre>名称: minimax
+启动命令: uvx
+参数:     minimax-mcp
+环境变量: {"MINIMAX_API_KEY": "你的 key", "MINIMAX_API_HOST": "https://api.minimaxi.com"}</pre>
+              </div>
+              <div class="mcp-example">
+                <div class="mcp-example-title">② 文件系统访问（官方 filesystem-server，需要 Node.js）</div>
+                <pre>名称: filesystem
+启动命令: npx
+参数:     -y
+          @modelcontextprotocol/server-filesystem
+          E:\</pre>
+              </div>
+              <div class="mcp-example">
+                <div class="mcp-example-title">③ 高德地图</div>
+                <pre>名称: amap
+启动命令: npx
+参数:     -y
+          @amap/amap-maps-mcp-server
+环境变量: {"AMAP_MAPS_API_KEY": "你的高德 key"}</pre>
+              </div>
+              <div class="mcp-help-footer">
+                <strong>步骤</strong>：填表 → <strong>测试连接</strong> 看到"工具数 N"再 <strong>添加服务器</strong>。<br>
+                <strong>排错</strong>：测试报"command not found" → 在终端手敲一次命令验证 PATH；启动后立刻断开 → 看 <code>npm start</code> 的控制台 stderr；模型不调工具 → 在对话里明说"用 xxx 的 yyy 工具"。
+              </div>
+            </div>
+          </details>
+
           <div id="mcpServerList"></div>
           <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:12px">
             <div style="font-size:13px;font-weight:600;margin-bottom:8px">添加 MCP 服务器</div>
-            <div class="form-group"><label>服务器名称</label><input id="mcpName" placeholder="例如: my-tools" /></div>
-            <div class="form-group"><label>启动命令</label><input id="mcpCommand" placeholder="例如: npx 或 python" /></div>
-            <div class="form-group"><label>参数 (每行一个)</label><textarea id="mcpArgs" rows="3" placeholder="-m&#10;my_mcp_server"></textarea></div>
-            <div class="form-group"><label>工作目录 (可选)</label><input id="mcpCwd" placeholder="留空使用默认" /></div>
+            <div class="form-group"><label>服务器名称 <span class="form-hint">cc-wrap 内部识别用，随便起</span></label><input id="mcpName" placeholder="例如: minimax" /></div>
+            <div class="form-group"><label>启动命令 <span class="form-hint">可执行文件名，需在系统 PATH 中</span></label><input id="mcpCommand" placeholder="npx / python / uvx / node" /></div>
+            <div class="form-group"><label>参数 (每行一个) <span class="form-hint">跟在启动命令后的参数</span></label><textarea id="mcpArgs" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;E:\"></textarea></div>
+            <div class="form-group"><label>工作目录 (可选) <span class="form-hint">子进程的 cwd，留空使用 cc-wrap 当前目录</span></label><input id="mcpCwd" placeholder="留空使用默认" /></div>
             <div class="form-group">
-              <label>环境变量 (可选, JSON格式)</label>
-              <input id="mcpEnv" placeholder='{"API_KEY": "xxx"}' />
+              <label>环境变量 (可选, JSON 格式) <span class="form-hint">API key 等敏感配置放这里</span></label>
+              <input id="mcpEnv" placeholder='{"API_KEY": "sk-xxx"}' />
             </div>
             <div style="display:flex;gap:8px">
               <button class="btn-primary" id="addMcpBtn">添加服务器</button>
@@ -295,17 +374,17 @@
 
   <!-- 右键菜单 -->
   <div class="context-menu" id="contextMenu" style="display:none">
-    <div class="ctx-item" data-action="open">📂 打开</div>
-    <div class="ctx-item" data-action="copyPath">📋 复制路径</div>
-    <div class="ctx-item" data-action="copyName">📄 复制文件名</div>
+    <div class="ctx-item" data-action="open">打开</div>
+    <div class="ctx-item" data-action="copyPath">复制路径</div>
+    <div class="ctx-item" data-action="copyName">复制文件名</div>
     <div class="ctx-separator"></div>
-    <div class="ctx-item" data-action="newFile">➕ 新建文件</div>
-    <div class="ctx-item" data-action="newFolder">📁 新建文件夹</div>
+    <div class="ctx-item" data-action="newFile">新建文件</div>
+    <div class="ctx-item" data-action="newFolder">新建文件夹</div>
     <div class="ctx-separator"></div>
-    <div class="ctx-item" data-action="rename">✏️ 重命名</div>
-    <div class="ctx-item ctx-danger" data-action="delete">🗑 删除</div>
+    <div class="ctx-item" data-action="rename">重命名</div>
+    <div class="ctx-item ctx-danger" data-action="delete">删除</div>
     <div class="ctx-separator"></div>
-    <div class="ctx-item" data-action="refresh">🔄 刷新</div>
+    <div class="ctx-item" data-action="refresh">刷新</div>
   </div>
 
   <!-- 快速打开文件 -->

@@ -3,6 +3,46 @@
 
 const { getOpenAITools } = require('./tools');
 
+// 默认请求超时（120s，避免 Windows 上断网时无限挂起）
+const DEFAULT_TIMEOUT_MS = 120 * 1000;
+
+// 启动时配置代理（读取 HTTPS_PROXY / HTTP_PROXY 环境变量）
+let proxyConfigured = false;
+function ensureProxyConfigured() {
+  if (proxyConfigured) return;
+  proxyConfigured = true;
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy
+    || process.env.HTTP_PROXY || process.env.http_proxy;
+  if (!proxyUrl) return;
+  try {
+    const undici = require('undici');
+    undici.setGlobalDispatcher(new undici.ProxyAgent(proxyUrl));
+    console.log('[API] 已配置代理:', proxyUrl);
+  } catch (e) {
+    console.warn('[API] 代理配置失败:', e.message);
+  }
+}
+
+// 组合多个 AbortSignal（用户取消信号 + 超时信号）
+function combineSignals(signals) {
+  const valid = signals.filter(Boolean);
+  if (valid.length === 0) return undefined;
+  if (valid.length === 1) return valid[0];
+  // Node 20+ 有 AbortSignal.any
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(valid);
+  // 兼容 Node 18：手动转发
+  const ctrl = new AbortController();
+  for (const s of valid) {
+    if (s.aborted) { ctrl.abort(s.reason); return ctrl.signal; }
+    s.addEventListener('abort', () => ctrl.abort(s.reason), { once: true });
+  }
+  return ctrl.signal;
+}
+
+function buildSignal(userSignal, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  return combineSignals([userSignal, AbortSignal.timeout(timeoutMs)]);
+}
+
 /**
  * 判断是否使用 Anthropic 格式
  */
@@ -40,6 +80,7 @@ async function callAnthropicAPI(messages, tools, system, options) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),
+    signal: buildSignal(options.signal),
   });
 
   if (!response.ok) {
@@ -84,6 +125,7 @@ async function callAnthropicStream(messages, tools, system, options, callbacks) 
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),
+    signal: buildSignal(options.signal),
   });
 
   if (!response.ok) {
@@ -196,24 +238,43 @@ async function callAnthropicStream(messages, tools, system, options, callbacks) 
 // ==================== OpenAI 格式 ====================
 
 /**
- * 转换 Anthropic 消息格式到 OpenAI 格式（支持 tool_use/tool_result）
+ * 判断模型是否支持视觉输入（image_url）
+ * 不支持的模型（如 deepseek-chat、deepseek-reasoner、gpt-3.5、MiniMax-M2.7 等）发图片会 400
  */
-function toOpenAIMessagesWithTools(messages, system) {
+function modelSupportsVision(model) {
+  if (!model) return false;
+  // 显式黑名单（即使匹配下面的正则也强制返回 false）
+  if (/^deepseek-(chat|reasoner|v3|coder)/i.test(model)) return false;
+  // 命名包含 vision / vl / 4o / 4-turbo / 4.5 / Claude / Gemini / glm-4v / step-1v 等
+  return /vision|-vl-|vl-|qwen.*vl|gpt-4o|gpt-4v|gpt-4\.5|gpt-4-turbo|gemini|claude|sonnet|opus|haiku|glm-4v|glm-4\.5v|step-1v|step-2-mini|abab.*vision/i.test(model);
+}
+
+/**
+ * 转换 Anthropic 消息格式到 OpenAI 格式（支持 tool_use/tool_result）
+ * @param {string} [model] 用于判断是否需要剥离图片（非视觉模型会 400）
+ */
+function toOpenAIMessagesWithTools(messages, system, model) {
   const out = [];
   if (system) out.push({ role: 'system', content: system });
+  const supportsVision = modelSupportsVision(model);
 
   for (const m of messages) {
     if (m.role === 'assistant' && Array.isArray(m.content)) {
       const textParts = m.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
       const toolParts = m.content.filter(c => c.type === 'tool_use');
       const msg = { role: 'assistant' };
-      if (textParts) msg.content = textParts;
+      // content 必须始终存在（null 表示无文本内容），DeepSeek 等 API 严格校验
+      msg.content = textParts || null;
       if (toolParts.length > 0) {
         msg.tool_calls = toolParts.map(t => ({
           id: t.id,
           type: 'function',
           function: { name: t.name, arguments: JSON.stringify(t.input) }
         }));
+      }
+      // DeepSeek 推理模式：保留 reasoning_content 用于后续轮次
+      if (m.reasoning_content) {
+        msg.reasoning_content = m.reasoning_content;
       }
       out.push(msg);
     } else if (m.role === 'user' && Array.isArray(m.content)) {
@@ -225,13 +286,20 @@ function toOpenAIMessagesWithTools(messages, system) {
       } else {
         const textParts = m.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
         const imageParts = m.content.filter(c => c.type === 'image');
-        if (imageParts.length > 0) {
+        if (imageParts.length > 0 && supportsVision) {
+          // 视觉模型：把图片塞成 image_url
           const content = [];
           if (textParts) content.push({ type: 'text', text: textParts });
           for (const img of imageParts) {
             content.push({ type: 'image_url', image_url: { url: `data:${img.source.media_type};base64,${img.source.data}` } });
           }
           out.push({ role: 'user', content });
+        } else if (imageParts.length > 0) {
+          // 非视觉模型：剥离图片，保留 text（路径 hint 已在 text 里），加占位提示让模型知道有图但需调工具识别
+          const placeholder = textParts
+            ? textParts + '\n\n[本对话有图片附件，但当前模型不支持直接读取图片。请调用支持图片的工具（如 MCP 的 understand_image）并用文本中给出的本地图片路径作为参数。]'
+            : '[图片附件，当前模型不支持直接读取，请调用支持图片的工具并使用本地路径。]';
+          out.push({ role: 'user', content: placeholder });
         } else {
           out.push({ role: 'user', content: textParts || '' });
         }
@@ -251,7 +319,7 @@ function toOpenAIMessagesWithTools(messages, system) {
 async function callOpenAIAPI(messages, tools, system, options) {
   const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7 } = options;
 
-  const oaiMessages = toOpenAIMessagesWithTools(messages, system);
+  const oaiMessages = toOpenAIMessagesWithTools(messages, system, model);
   const body = {
     model,
     max_tokens: maxTokens,
@@ -270,6 +338,7 @@ async function callOpenAIAPI(messages, tools, system, options) {
       'Authorization': 'Bearer ' + apiKey,
     },
     body: JSON.stringify(body),
+    signal: buildSignal(options.signal),
   });
 
   if (!response.ok) {
@@ -299,12 +368,19 @@ async function callOpenAIAPI(messages, tools, system, options) {
     }
   }
 
+  // DeepSeek 推理模式：返回 reasoning_content
+  const extra = {};
+  if (message.reasoning_content) {
+    extra.reasoning_content = message.reasoning_content;
+  }
+
   const stopReason = choice?.finish_reason === 'tool_calls' ? 'tool_use' : 'end_turn';
 
   return {
     content,
     stop_reason: stopReason,
     usage: data.usage || {},
+    ...extra,
   };
 }
 
@@ -315,7 +391,7 @@ async function callOpenAIStream(messages, tools, system, options, callbacks) {
   const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7 } = options;
   const { onText, onToolUse, onComplete } = callbacks;
 
-  const oaiMessages = toOpenAIMessagesWithTools(messages, system);
+  const oaiMessages = toOpenAIMessagesWithTools(messages, system, model);
   const body = {
     model,
     max_tokens: maxTokens,
@@ -336,6 +412,7 @@ async function callOpenAIStream(messages, tools, system, options, callbacks) {
       'Authorization': 'Bearer ' + apiKey,
     },
     body: JSON.stringify(body),
+    signal: buildSignal(options.signal),
   });
 
   if (!response.ok) {
@@ -348,6 +425,7 @@ async function callOpenAIStream(messages, tools, system, options, callbacks) {
   let buffer = '';
   let stopReason = 'end_turn';
   let usage = {};
+  let reasoningContent = '';
   const toolCallsMap = {}; // index -> { id, name, arguments }
 
   while (true) {
@@ -373,6 +451,11 @@ async function callOpenAIStream(messages, tools, system, options, callbacks) {
         // 文本内容
         if (delta.content) {
           if (onText) onText(delta.content);
+        }
+
+        // DeepSeek 推理内容（reasoning_content）
+        if (delta.reasoning_content) {
+          reasoningContent += delta.reasoning_content;
         }
 
         // 工具调用
@@ -447,14 +530,15 @@ async function callOpenAIStream(messages, tools, system, options, callbacks) {
     if (onToolUse) onToolUse(tc.id, tc.name, input);
   }
 
-  if (onComplete) onComplete(stopReason, usage);
-  return { stopReason, usage };
+  if (onComplete) onComplete(stopReason, usage, { reasoning_content: reasoningContent });
+  return { stopReason, usage, reasoning_content: reasoningContent };
 }
 
 /**
  * 统一 API 调用入口（非流式）
  */
 async function callAPI(messages, tools, system, options) {
+  ensureProxyConfigured();
   const { endpoint, model } = options;
   if (shouldUseAnthropicFormat(endpoint, model)) {
     return callAnthropicAPI(messages, tools, system, options);
@@ -467,6 +551,7 @@ async function callAPI(messages, tools, system, options) {
  * 统一流式 API 调用入口
  */
 async function callAPIStream(messages, tools, system, options, callbacks) {
+  ensureProxyConfigured();
   const { endpoint, model } = options;
   if (shouldUseAnthropicFormat(endpoint, model)) {
     return callAnthropicStream(messages, tools, system, options, callbacks);

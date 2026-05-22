@@ -91,11 +91,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'WebSearch',
-    description: 'Search the web for information. Returns search results with titles, snippets, and URLs.',
+    description: 'Search the web via DuckDuckGo (returns up to 8 fresh results: title, URL, snippet). For time-sensitive queries (current events, "latest", a specific year, prices, scores), include explicit time keywords like the current year in the query so the engine ranks recent pages. If another search tool (e.g. an MCP `web_search`) is available, prefer it; this is the fallback.',
     input_schema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Search query (3-5 keywords for best results)' }
+        query: { type: 'string', description: 'Search query (3-5 keywords; for time-sensitive topics, include the current year)' }
       },
       required: ['query']
     }
@@ -146,6 +146,21 @@ const TOOL_DEFINITIONS = [
         status: { type: 'string', enum: ['in_progress', 'completed', 'deleted'], description: 'New status' }
       },
       required: ['taskId', 'status']
+    }
+  },
+  {
+    name: 'InstallSkill',
+    description: 'Register a new Skill into cc-wrap so the app and future conversations know how to use a CLI / SDK / API. Use this whenever the user pastes a vendor onboarding snippet (e.g. "请帮我接入 XXX CLI"), gives you a SKILL.md URL, or otherwise asks to integrate an external tool. The Skill is written to %APPDATA%/cc-wrap/skills/<name>/SKILL.md with YAML frontmatter. Run any required `npm install -g xxx` / login steps with Bash BEFORE calling this tool, verify with `<cli> --version` or `<cli> --help`, then call InstallSkill with concise usage docs in `content`. Choose `triggers` carefully (Chinese + English keywords the user is likely to mention when they need this skill); set `alwaysActive: true` only if the skill provides core capability the user explicitly wants always on. Do NOT call this tool for one-off shell tasks.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'kebab-case unique skill name, e.g. "mmx-cli". Used as directory name and identifier.' },
+        description: { type: 'string', description: 'One-line user-facing description of what this skill does.' },
+        content: { type: 'string', description: 'Full SKILL.md body (markdown). Document: required CLI commands with examples, parameter conventions, common pitfalls, when to use. Be specific and example-driven — the model in future conversations reads this verbatim.' },
+        triggers: { type: 'array', items: { type: 'string' }, description: 'Keywords (Chinese + English) that should auto-activate this skill when present in the user message or attachments. Examples: ["image","图片","识图"] for a vision skill.' },
+        alwaysActive: { type: 'boolean', description: 'Set true only if the user explicitly wants this skill injected on every turn (rare). Default false.' }
+      },
+      required: ['name', 'description', 'content']
     }
   }
 ];

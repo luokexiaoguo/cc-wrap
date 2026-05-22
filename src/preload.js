@@ -1,4 +1,6 @@
 const { contextBridge, ipcRenderer, clipboard } = require('electron');
+let _hljs = null;
+try { _hljs = require('highlight.js'); } catch (_) {}
 
 const INVOKE_CHANNELS = [
   'get-config', 'set-config',
@@ -7,7 +9,8 @@ const INVOKE_CHANNELS = [
   'tool-read', 'tool-write', 'tool-edit', 'tool-glob', 'tool-grep',
   'tool-bash', 'tool-list-dir',
   'get-file-tree', 'select-folder', 'get-work-dir', 'set-work-dir',
-  'read-image', 'paste-image',
+  'read-image', 'paste-image', 'save-pasted-image', 'read-file-as-data-url',
+  'pick-attachments',
   'claude-api', 'claude-api-stream',
   'get-tool-definitions', 'execute-tool',
   'agent-start', 'agent-cancel',
@@ -17,14 +20,17 @@ const INVOKE_CHANNELS = [
   'mcp-connect', 'mcp-disconnect', 'mcp-status',
   'fetch-web-content', 'add-mcp-from-url',
   'get-recent-projects', 'add-recent-project',
-  'get-app-icon'
+  'get-app-icon',
+  'get-conversations', 'save-conversations',
+  'get-tasks', 'clear-tasks'
 ];
 
 const ON_CHANNELS = [
   'stream-chunk',
   'agent-stream-text', 'agent-stream-tool-start', 'agent-stream-tool-result',
   'agent-complete', 'agent-permission-request',
-  'auto-memories-extracted', 'mcp-status'
+  'auto-memories-extracted', 'mcp-status',
+  'tasks-changed', 'skills-changed'
 ];
 
 const SEND_CHANNELS = [
@@ -64,5 +70,21 @@ contextBridge.exposeInMainWorld('api', {
 
   clipboard: {
     writeText: (text) => clipboard.writeText(text)
-  }
+  },
+
+  // highlight.js 暴露：仅暴露受限 API，不直接传引用避免 contextBridge 序列化问题
+  highlight: _hljs ? {
+    available: true,
+    languages: () => _hljs.listLanguages(),
+    highlight: (code, lang) => {
+      try {
+        if (lang && _hljs.getLanguage(lang)) {
+          return _hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+        }
+        return _hljs.highlightAuto(code).value;
+      } catch (e) {
+        return null;
+      }
+    }
+  } : { available: false }
 });

@@ -38,7 +38,16 @@
       "Read(//tmp/asar-check/src/main/**)",
       "PowerShell(Copy-Item *)",
       "Bash(python3 -c \"from PIL import Image; print\\('Pillow available'\\)\")",
-      "Bash(python3 -c \"from PIL import Image; print\\('ok'\\)\")"
+      "Bash(python3 -c \"from PIL import Image; print\\('ok'\\)\")",
+      "Bash(mmx --version)",
+      "Bash(mmx quota *)",
+      "Bash(mmx vision *)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(mmx --help)",
+      "Bash(grep -E '^\\(electron|electron-store|electron-builder|iconv-lite|tree-kill|highlight\\\\.js|undici|@electron\\)$')",
+      "Bash(awk *)",
+      "Bash(git add *)",
+      "Bash(git rm *)"
     ]
   }
 }
