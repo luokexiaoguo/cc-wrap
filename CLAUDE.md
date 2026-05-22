@@ -75,7 +75,7 @@ Hooks `console.log/error/warn` to write both to terminal and a file. `initLogger
 
 ### Settings: Log viewer & Cache clear
 
-Settings has a "日志" tab (`data-stab="logs"`) with search (300ms debounce), refresh, clear, export buttons, and a `<pre>` viewer. The "通用" tab has a cache-clear section with buttons for pasted-images, conversations, and all-cache. Clearing conversations resets `state.conversations` and re-renders the UI.
+Settings has a "日志" tab (`data-stab="logs"`) with search (300ms debounce), refresh, clear, export buttons, and a `<pre>` viewer. The "通用" tab has a cache-clear section with buttons for pasted-images, conversations, and all-cache. Clearing conversations resets `state.conversations` and re-renders the UI. The "关于" tab shows app version and a GitHub link that opens in the default browser via `open-external` IPC (`shell.openExternal`).
 
 ### MCP client (`src/main/mcp-client.js`)
 
@@ -129,7 +129,7 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 - **Font size**: chat content reads `var(--chat-font-size)` (default 14px). `applyFontSize(px)` sets this on `documentElement`; slider in Settings > Theme persists to `config.fontSize`.
 - **i18n**: `I18N` object in `app.js` with `zh`/`en` keys, `t(key)` lookup, `applyLanguage()` for dynamic UI updates. When applying language to a button with icon (`.footer-icon` + `.footer-label`), only set `.footer-label` text — `el.textContent = t(...)` would wipe the icon.
 - **Toast** (`showToast(msg, type?, duration?)`): `type` ∈ `success` / `error` / `warning` / `info` controls left-border color + icon. Error toasts last 6s, warning 5s, default 3.5s.
-- **Tray**: `minimizeToTray` config option, close button minimizes; context menu (show/quit), double-click to show.
+- **Tray**: `minimizeToTray` config option, close button minimizes. Context menu: 显示窗口 / 隐藏窗口 / 新建对话 / 设置 / 退出. "新建对话" sends `tray-new-conversation` IPC; "设置" sends `tray-open-settings` IPC. Double-click to show window.
 - **Window bounds** persisted to `config.windowBounds` on resize/move (skipped while minimized/maximized).
 
 ## Things that are easy to break
