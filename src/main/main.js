@@ -71,6 +71,7 @@ const store = new Store({
     chatPaneWidth: 460,
     chatPaneHidden: false,
     alwaysAllowedTools: [],
+    autoSave: false,
     customSystemPrompt: '',
     windowBounds: null
   }

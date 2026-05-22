@@ -448,6 +448,67 @@ body.light-theme .titlebar-drag { color: var(--text-primary); }
   font-weight: 500;
 }
 
+/* 欢迎页 - 最近项目 */
+.welcome-recent { margin-bottom: 28px; }
+.welcome-recent h3 {
+  font-size: 11px; font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+  padding-left: 4px;
+}
+.recent-projects { display: flex; flex-wrap: wrap; gap: 8px; }
+.recent-project-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  max-width: 280px;
+  overflow: hidden;
+}
+.recent-project-item:hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.recent-project-item .rp-icon { flex-shrink: 0; font-size: 14px; }
+.recent-project-item .rp-title {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text-primary); font-weight: 500;
+}
+
+/* 欢迎页 - 快捷键 */
+.shortcut-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+}
+.shortcut-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.shortcut-item kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  border: 1px solid rgba(217,119,87,0.2);
+  white-space: nowrap;
+  min-width: 28px;
+  text-align: center;
+}
+.shortcut-item .sd { font-weight: 500; }
+
 /* ===== 消息 ===== */
 .messages {
   max-width: 1080px; width: 100%;

@@ -36,6 +36,7 @@ var I18N = {
     clearPastedImages: '清理粘贴的图片', clearConversations: '清理对话历史',
     clearAllCache: '清理所有缓存', clearConfirm: '确定要清理吗？此操作不可撤销。',
     exportSuccess: '对话已导出为 Markdown 文件', exportClipboard: '导出失败，已复制到剪贴板',
+    autoSave: '自动保存', autoSaveDesc: '编辑文件时自动保存（每 5 秒）',
     about: '关于', appVersion: '版本', appDescription: 'cc-wrap 是一个基于 Electron 的 Claude Code 桌面前端，支持多模型、MCP 工具扩展、Skills 注入、记忆系统等功能。',
     githubRepo: 'GitHub 仓库',
   },
@@ -69,6 +70,7 @@ var I18N = {
     clearPastedImages: 'Clear Pasted Images', clearConversations: 'Clear Conversations',
     clearAllCache: 'Clear All Cache', clearConfirm: 'Are you sure? This action cannot be undone.',
     exportSuccess: 'Conversation exported as Markdown', exportClipboard: 'Export failed, copied to clipboard',
+    autoSave: 'Auto Save', autoSaveDesc: 'Auto-save edited files (every 5s)',
     about: 'About', appVersion: 'Version', appDescription: 'cc-wrap is an Electron desktop frontend for Claude Code, supporting multiple models, MCP tools, Skills, and memory system.',
     githubRepo: 'GitHub Repository',
   }
@@ -1194,6 +1196,11 @@ function flushConversations() {
   });
 }
 
+// 窗口失焦时立即 flush，减少 agent-complete 前切换应用时崩溃丢数据
+window.addEventListener('blur', function() {
+  flushConversations();
+});
+
 // 关闭窗口前立刻 flush 未写入的对话（防止 300ms 防抖窗口内的数据丢失）
 window.addEventListener('beforeunload', function() {
   if (_saveConversationsTimer) {
@@ -1380,6 +1387,48 @@ function updateToolCallIncremental(id, tc) {
   return true;
 }
 
+// 更新欢迎页动态内容（最近项目）
+function updateWelcomeScreen() {
+  var recentSection = $('welcomeRecent');
+  var recentEl = $('recentProjects');
+  if (!recentSection || !recentEl) return;
+
+  var items = [];
+  // 从最近项目中取
+  if (state.config && Array.isArray(state.config.recentProjects)) {
+    state.config.recentProjects.forEach(function(p) {
+      if (typeof p === 'string') items.push({ title: p, id: null });
+      else if (p && p.path) items.push({ title: p.path, id: null });
+    });
+  }
+  // 从对话历史前 3 条补
+  if (state.conversations) {
+    state.conversations.slice(0, 3).forEach(function(c) {
+      if (!c.messages || c.messages.length === 0) return;
+      var firstMsg = c.messages[0];
+      var title = firstMsg && firstMsg.content
+        ? firstMsg.content.replace(/<[^>]+>/g, '').substring(0, 48)
+        : '新对话';
+      items.push({ title: title, id: c.id });
+    });
+  }
+
+  if (items.length === 0) { recentSection.style.display = 'none'; return; }
+
+  recentSection.style.display = '';
+  recentEl.innerHTML = items.map(function(item) {
+    return '<div class="recent-project-item"' + (item.id ? ' data-conv-id="' + item.id + '"' : '') + '><span class="rp-icon">💬</span><span class="rp-title">' + esc(item.title) + '</span></div>';
+  }).join('');
+
+  recentEl.querySelectorAll('.recent-project-item[data-conv-id]').forEach(function(el) {
+    el.onclick = function() {
+      var id = this.getAttribute('data-conv-id');
+      var conv = state.conversations.find(function(c) { return c.id === id; });
+      if (conv) { state.currentConversation = conv; renderConversations(); renderMessages(); scrollToBottom(); }
+    };
+  });
+}
+
 // 消息渲染
 function renderMessages() {
   var messagesEl = $('messages');
@@ -1391,6 +1440,7 @@ function renderMessages() {
     var mc = document.querySelector('.main-content');
     var isSplit = mc && mc.classList.contains('editor-open');
     welcomeEl.style.display = isSplit ? 'none' : 'flex';
+    if (!isSplit) updateWelcomeScreen();
     // 分屏空对话时给一个轻量占位，避免聊天面板看起来像挂了
     messagesEl.innerHTML = isSplit
       ? '<div class="empty-chat-hint">开始与 cc-wrap 对话\n（Enter 发送，Ctrl+V 粘贴图片）</div>'
@@ -2776,6 +2826,23 @@ async function saveCurrentFile() {
   await saveFileByIndex(state.activeFileIndex);
 }
 
+// ========== 自动保存 ==========
+var _autoSaveTimer = null;
+function startAutoSaveTimer() {
+  stopAutoSaveTimer();
+  if (!state.config.autoSave) return;
+  _autoSaveTimer = setInterval(function() {
+    if (state.activeFileIndex < 0) return;
+    var file = state.openFiles[state.activeFileIndex];
+    if (file && file.modified) {
+      saveCurrentFile();
+    }
+  }, 5000);
+}
+function stopAutoSaveTimer() {
+  if (_autoSaveTimer) { clearInterval(_autoSaveTimer); _autoSaveTimer = null; }
+}
+
 function renderEditorTabs() {
   var tabsEl = $('editorTabs');
   if (!tabsEl) return;
@@ -2921,11 +2988,12 @@ function showEditor() {
   var editorPanel = $('editorPanel');
   if (mainContent) mainContent.classList.add('editor-open');
   if (editorPanel) editorPanel.style.display = 'flex';
-  // 让欢迎页根据新布局重新决定显隐
   try { renderMessages(); } catch(_) {}
+  startAutoSaveTimer();
 }
 
 function hideEditor() {
+  stopAutoSaveTimer();
   var mainContent = document.querySelector('.main-content');
   var editorPanel = $('editorPanel');
   if (mainContent) mainContent.classList.remove('editor-open');
@@ -3552,7 +3620,11 @@ function renderSettingsTab(tab) {
       '<div class="form-group"><label>' + t('allowedTools') + '</label><div style="display:flex;flex-wrap:wrap;gap:8px">' +
         ['Read','Write','Edit','Glob','Grep','Bash','ListDirectory'].map(function(t) {
           return '<label class="checkbox-item"><input type="checkbox" class="tool-check" value="' + t + '"' + (state.allowedTools.indexOf(t) >= 0 ? ' checked' : '') + ' /> ' + t + '</label>';
-        }).join('') + '</div></div>';
+        }).join('') + '</div></div>' +
+      '<div class="form-group" style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">' +
+        '<label class="checkbox-item"><input type="checkbox" id="cfgAutoSave"' + (state.config.autoSave ? ' checked' : '') + ' /> ' + t('autoSave') + '</label>' +
+        '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;margin-left:24px">' + t('autoSaveDesc') + '</div>' +
+      '</div>';
     var selectBtn = $('selectWorkDirBtn');
     if (selectBtn) {
       selectBtn.onclick = async function() {
@@ -3585,6 +3657,17 @@ function renderSettingsTab(tab) {
         await window.api.invoke('set-config', 'customSystemPrompt', val);
         state.config.customSystemPrompt = val;
         showToast('自定义提示词已保存，下次对话生效', 'success');
+      };
+    }
+    // autoSave 切换
+    var autoSaveCb = $('cfgAutoSave');
+    if (autoSaveCb) {
+      autoSaveCb.onchange = async function() {
+        var val = this.checked;
+        await window.api.invoke('set-config', 'autoSave', val);
+        state.config.autoSave = val;
+        if (val) startAutoSaveTimer(); else stopAutoSaveTimer();
+        showToast(val ? t('autoSave') + ' 已开启' : t('autoSave') + ' 已关闭', 'success');
       };
     }
 

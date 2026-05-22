@@ -14,23 +14,24 @@ The official Claude Code desktop client has two pain points: incomplete Chinese 
 
 | Feature | Description |
 |---------|-------------|
-| 🌐 Chinese UI | Fully localized interface, 14 slash commands (`/help` `/clear` `/model` `/memory` `/mcp` `/skill` `/theme` `/export` `/init` `/cost` `/permissions` `/tools` `/workdir` `/compact`) |
-| 📁 File Operations | Read · Write · Edit · Glob · Grep with automatic UTF-8 / UTF-16 / GBK detection; workspace file tree with context menu |
-| 🔨 Bash Commands | Non-blocking `spawn` execution, cancellable, with cwd / shell / env context |
-| 🌐 Web Tools | Built-in WebSearch / WebFetch — no extra setup |
-| 🔧 Model Switching | Top dropdown selector, **automatic Anthropic / OpenAI format detection**, drop-in third-party model support |
-| 🔌 MCP Extensions | Standard JSON-RPC over stdio implementation, ready-to-fill examples embedded in the dialog (MiniMax / filesystem / Amap, etc.) |
+| 🌐 Chinese-first UI | Fully localized interface, 14 slash commands (`/help` `/clear` `/model` `/memory` `/mcp` `/skill` `/theme` `/export` `/init` `/cost` `/permissions` `/tools` `/workdir` `/compact`) |
+| 🔧 Model Switching | Dropdown selector, **automatic Anthropic / OpenAI format detection**, drop-in third-party model support |
+| 📁 File Operations | Read · Write · Edit · Glob · Grep with automatic UTF-8/UTF-16/GBK detection; workspace file tree with context menu |
+| 🔨 Bash Commands | Non-blocking execution, cancellable, with custom cwd / shell / env context |
+| 🔌 MCP Extensions | Standard JSON-RPC over stdio; ready-to-fill examples embedded in the dialog (MiniMax / filesystem / Amap, etc.) |
+| 🧩 Skills Injection | Custom prompt templates injected into System Prompt; supports auto-import from URL |
+| 💾 Memory System | Cross-conversation persistence for preferences and project context, auto-extracted + manual |
 | 📋 Plan UI Task Panel | Large tasks auto-decomposed, progress visible (○ → ◐ → ✓), manually toggleable |
-| 💾 Memory System | Cross-conversation persistence for preferences and project context, both auto-extracted and manual |
-| 🧩 Skills Templates | Custom prompt templates, injected into System Prompt on demand |
-| 🖼️ Image Recognition | Paste / drag-and-drop, auto-saved to disk so MCP tools can read it; non-vision models auto-strip images to avoid 400 errors |
-| ✨ Markdown Rich Text | Tables, lists, blockquotes, code blocks (highlight.js, 190+ languages), Serif headings |
+| 🖼️ Image Recognition | Paste / drag-and-drop, auto-saved to disk for MCP tool access; non-vision models auto-strip images |
+| 📡 Streaming Output | Real-time agent execution, incremental tool-call rendering, visible "thinking..." indicator |
+| 🛡️ Permission Management | Confirmation modal for Write / Edit / Bash; "always allow" persists across restarts |
+| 📊 Token Statistics | Per-message token display (↑input · ↓output), `/cost` for per-conversation and global breakdown |
+| 📝 Log Viewer | Built-in log panel in Settings with search, refresh, export; 5MB auto-rotation |
+| 🗑️ Cache Cleanup | One-click cleanup of pasted images, conversation history, logs, and other cached data |
 | 🎨 Warm Theme | Claude-branded palette, light & dark modes, adjustable font size (12-20px) |
-| 📡 Streaming Output | Real-time agent execution, incremental DOM for tool calls, visible "thinking..." indicator |
-| 🛡️ Permission Management | Confirmation modal for Write / Edit / Bash; "always allow" choice persists across restarts |
-| 🔄 Failure Retry | API failures highlight the message in red with a one-click retry button |
-| ⚙️ Custom System Prompt | Edit additional instructions in Settings; takes effect on the next conversation |
-| ⌨️ Custom Title Bar | Frameless + draggable + system tray; window position and size auto-restored |
+| 🌐 Language Switch | Instant Chinese/English toggle — no restart needed |
+| 🔄 Failure Retry | Failed API calls highlight the message with a one-click retry button |
+| ⌨️ System Tray | Close minimizes to tray; right-click menu for new conversation, settings, etc. |
 
 ## Supported Models
 
@@ -80,6 +81,7 @@ All user data lives under `%APPDATA%/cc-wrap/` (Windows):
 - `config.json` — settings (API keys encrypted via Electron `safeStorage`)
 - `conversations.json` — chat history (atomic write + debounce + immediate flush on completion)
 - `memory.json` / `skills.json` / `mcp-servers.json` — per-module JSON
+- `logs/app.log` — runtime logs (5MB auto-rotation)
 - `pasted-images/` — auto-saved pasted images
 
 ---
