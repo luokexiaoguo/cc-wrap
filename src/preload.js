@@ -25,6 +25,7 @@ const INVOKE_CHANNELS = [
   'get-tasks', 'clear-tasks',
   'get-logs', 'clear-logs', 'clear-cache',
   'export-logs', 'export-conversation',
+  'delete-pasted-images',
   'terminal-spawn', 'terminal-write', 'terminal-resize', 'terminal-kill'
 ];
 

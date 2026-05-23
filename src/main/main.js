@@ -730,6 +730,21 @@ app.whenReady().then(() => {
     }
   });
 
+  // 删除已落盘的粘贴图片（同时清理引用计数为 0 的目录暂不处理，交给 clear-cache）
+  ipcMain.handle('delete-pasted-images', async (event, paths) => {
+    if (!Array.isArray(paths)) return;
+    for (const p of paths) {
+      try {
+        if (typeof p === 'string' && p.includes('pasted-images') && fs.existsSync(p)) {
+          await fs.promises.unlink(p);
+          console.log('[delete-pasted-images] 已删除:', p);
+        }
+      } catch (err) {
+        console.warn('[delete-pasted-images] failed:', p, err.message);
+      }
+    }
+  });
+
   // ========== API 调用 ==========
 
   // 判断是否使用 Anthropic 格式：Claude 模型或 Anthropic 官方端点

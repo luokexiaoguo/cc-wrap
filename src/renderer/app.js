@@ -1354,11 +1354,42 @@ function selectConversation(id) {
 
 function deleteConversation(id, e) {
   if (e) e.stopPropagation();
+  // 收集被删对话中的图片路径
+  var conv = state.conversations.find(function(c) { return c.id === id; });
+  var imagePaths = [];
+  if (conv && conv.messages) {
+    conv.messages.forEach(function(msg) {
+      if (msg.attachments) {
+        msg.attachments.forEach(function(att) {
+          if (att.kind === 'image' && att.path) imagePaths.push(att.path);
+        });
+      }
+    });
+  }
   state.conversations = state.conversations.filter(function(c) { return c.id !== id; });
   if (state.currentConversation && state.currentConversation.id === id) state.currentConversation = state.conversations[0] || null;
   saveConversations();
   renderConversations();
   renderMessages();
+  // 删除未被其他对话引用的粘贴图片
+  if (imagePaths.length > 0) {
+    var remainingPaths = new Set();
+    state.conversations.forEach(function(c) {
+      if (c.messages) {
+        c.messages.forEach(function(msg) {
+          if (msg.attachments) {
+            msg.attachments.forEach(function(att) {
+              if (att.kind === 'image' && att.path) remainingPaths.add(att.path);
+            });
+          }
+        });
+      }
+    });
+    var toDelete = imagePaths.filter(function(p) { return !remainingPaths.has(p); });
+    if (toDelete.length > 0) {
+      window.api.invoke('delete-pasted-images', toDelete).catch(function() {});
+    }
+  }
 }
 
 // 对话保存：防抖 + 异步写文件（避免每次按键都触发磁盘 IO）
