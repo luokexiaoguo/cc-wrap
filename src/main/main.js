@@ -81,6 +81,10 @@ const store = new Store({
 // 把 store 注入 agent-loop，让它能持久化 alwaysAllowedTools
 setPersistenceStore(store);
 
+// 把 config.env 注入 tool-executor（如 TAVILY_API_KEY）
+const { setEnvConfig } = require('./tool-executor');
+setEnvConfig(store.get('env', {}));
+
 let mainWindow;
 const terminals = new Map(); // terminalId → node-pty process
 
@@ -1692,11 +1696,42 @@ ${conversationText}
   // 从 URL 自动添加 MCP 服务器
   ipcMain.handle('add-mcp-from-url', async (event, url) => {
     try {
-      const response = await fetch(url, {
-        headers: { 'User-Agent': 'cc-wrap/1.0' },
-        signal: AbortSignal.timeout(15000),
+      // 第一步：检测 URL 本身是否是 HTTP MCP 端点
+      const probeResponse = await fetch(url, {
+        headers: { 'Accept': 'application/json, text/event-stream' },
+        signal: AbortSignal.timeout(8000),
       });
-      const html = await response.text();
+
+      const contentType = probeResponse.headers.get('content-type') || '';
+
+      if (contentType.includes('text/event-stream') || contentType.includes('json')) {
+        // 是 MCP HTTP 端点，直接添加
+        const name = new URL(url).hostname.replace(/^www\./, '') + '-mcp';
+        const mcpPath = path.join(app.getPath('userData'), 'mcp-servers.json');
+        let mcpData = { servers: [] };
+        try { mcpData = JSON.parse(fs.readFileSync(mcpPath, 'utf-8')); } catch {}
+
+        // 检查是否已存在
+        const existing = mcpData.servers.find(s => s.command === url);
+        if (existing) {
+          return { success: false, message: `MCP 服务器 "${existing.name}" 已存在` };
+        }
+
+        const server = { name, command: url, args: [], cwd: '', env: {} };
+        mcpData.servers.push(server);
+        fs.writeFileSync(mcpPath, JSON.stringify(mcpData, null, 2));
+
+        // 自动连接
+        await mcp.connectAllServers([server]);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('mcp-status', mcp.getServerStatuses());
+        }
+
+        return { success: true, added: [name], message: `已添加并连接 HTTP MCP: ${name}` };
+      }
+
+      // 第二步：不是 MCP 端点，作为 HTML 页面尝试解析
+      const html = await probeResponse.text();
 
       // HTML 转文本
       const text = html

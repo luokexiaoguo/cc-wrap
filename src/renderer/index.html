@@ -210,7 +210,7 @@
               <span class="terminal-tab active">终端</span>
             </span>
             <span class="terminal-header-actions">
-              <button id="terminalToggleBtn" class="terminal-btn" title="新建终端">+</button>
+              <button id="terminalToggleBtn" class="terminal-btn" title="重启终端">⟳</button>
               <button id="terminalCloseBtn" class="terminal-btn" title="关闭终端面板">✕</button>
             </span>
           </div>
@@ -394,7 +394,7 @@
           <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:12px">
             <div style="font-size:13px;font-weight:600;margin-bottom:8px">添加 MCP 服务器</div>
             <div class="form-group"><label>服务器名称 <span class="form-hint">cc-wrap 内部识别用，随便起</span></label><input id="mcpName" placeholder="例如: minimax" /></div>
-            <div class="form-group"><label>启动命令 <span class="form-hint">可执行文件名，需在系统 PATH 中</span></label><input id="mcpCommand" placeholder="npx / python / uvx / node" /></div>
+            <div class="form-group"><label>启动命令 / URL <span class="form-hint">可执行文件名或 HTTP(S) URL</span></label><input id="mcpCommand" placeholder="npx / python / uvx / node / https://..." /></div>
             <div class="form-group"><label>参数 (每行一个) <span class="form-hint">跟在启动命令后的参数</span></label><textarea id="mcpArgs" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;E:\"></textarea></div>
             <div class="form-group"><label>工作目录 (可选) <span class="form-hint">子进程的 cwd，留空使用 cc-wrap 当前目录</span></label><input id="mcpCwd" placeholder="留空使用默认" /></div>
             <div class="form-group">

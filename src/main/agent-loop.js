@@ -133,6 +133,12 @@ async function runAgentLoop(mainWindow, options) {
     let round = 0;
     let totalUsage = { input_tokens: 0, output_tokens: 0 };
 
+    // 卡住检测：连续失败追踪
+    let consecutiveFails = 0;
+    let lastToolFamily = '';
+    let familyRounds = 0;
+    let stuckHintInjected = false;
+
     while (round < MAX_ROUNDS) {
       if (cancelToken.cancelled) {
         sendToRenderer(mainWindow, 'agent-complete', {
@@ -303,16 +309,21 @@ async function runAgentLoop(mainWindow, options) {
           ? `错误: ${result.error}`
           : (result.content || JSON.stringify(result));
 
+        // 截断过大的工具结果（超过 3000 字符），避免撑爆上下文
+        const truncated = typeof resultContent === 'string' && resultContent.length > 3000
+          ? resultContent.substring(0, 2500) + `\n... [结果过长，省略 ${resultContent.length - 2500} 字符]`
+          : resultContent;
+
         toolResults.push({
           type: 'tool_result',
           tool_use_id: tc.id,
-          content: resultContent
+          content: truncated
         });
 
         sendToRenderer(mainWindow, 'agent-stream-tool-result', {
           id: tc.id,
           name: tc.name,
-          result: resultContent,
+          result: truncated,
           error: !!result.error,
           round
         });
@@ -324,6 +335,30 @@ async function runAgentLoop(mainWindow, options) {
           role: 'user',
           content: toolResults
         });
+
+        // 卡住检测：统计连续失败的工具调用
+        let roundAllFailed = toolResults.every(r => typeof r.content === 'string' && r.content.startsWith('错误:'));
+        if (roundAllFailed) {
+          consecutiveFails += toolResults.length;
+          const currentFamily = toolCalls.length > 0 ? _toolFamily(toolCalls[0].name, toolCalls[0].input) : '';
+          if (currentFamily === lastToolFamily) familyRounds++;
+          else { familyRounds = 1; lastToolFamily = currentFamily; }
+
+          const hint = _checkStuck(consecutiveFails, familyRounds, currentFamily);
+          if (hint && !stuckHintInjected) {
+            console.log(`[Agent Loop] 检测到卡住，注入策略提示 (连续失败: ${consecutiveFails})`);
+            stuckHintInjected = true;
+            currentMessages.push({
+              role: 'user',
+              content: [{ type: 'text', text: hint }]
+            });
+          }
+        } else {
+          consecutiveFails = 0;
+          familyRounds = 0;
+          lastToolFamily = '';
+          stuckHintInjected = false;
+        }
       }
     }
 
@@ -337,6 +372,29 @@ async function runAgentLoop(mainWindow, options) {
   } finally {
     activeLoops.delete(loopId);
   }
+}
+
+/**
+ * 提取工具调用名称中的"基类"用于重复检测
+ * 例如 curl、fetch、WebFetch 都归为 "http_fetch"
+ */
+function _toolFamily(name, input) {
+  if (name === 'Bash') {
+    const cmd = (typeof input === 'object' ? (input.command || '') : '').toLowerCase();
+    if (cmd.includes('curl') || cmd.includes('wget') || cmd.includes('fetch')) return 'http_fetch';
+    return 'bash';
+  }
+  if (name === 'WebFetch') return 'http_fetch';
+  if (name === 'WebSearch') return 'web_search';
+  return name;
+}
+
+/**
+ * 检测是否"卡住"了：连续 N 轮相同类型的工具调用全部失败
+ */
+function _checkStuck(consecutiveFails, familyRounds, currentFamily) {
+  if (consecutiveFails < 3) return '';
+  return `[系统提示] 你连续 ${consecutiveFails} 次调用以错误告终${familyRounds > 0 ? `（连续 ${familyRounds} 轮调用 ${currentFamily} 类工具）` : ''}。请立即停止当前策略，换一种完全不同的方法，或直接告知用户失败原因。不要重复尝试类似的请求。`;
 }
 
 /**

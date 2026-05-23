@@ -3523,6 +3523,15 @@ document.addEventListener('click', function(e) {
   if (e.target.id === 'quickOpenOverlay') closeQuickOpen();
 });
 
+// 拦截外部链接，用默认浏览器打开
+document.addEventListener('click', function(e) {
+  var a = e.target.closest('a[href]');
+  if (a && a.href && (a.href.startsWith('http://') || a.href.startsWith('https://'))) {
+    e.preventDefault();
+    window.api.invoke('open-external', a.href);
+  }
+});
+
 // ========== 对话导出 ==========
 
 async function exportConversation() {

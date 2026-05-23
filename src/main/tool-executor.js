@@ -6,6 +6,10 @@ const path = require('path');
 const { spawn } = require('child_process');
 const iconv = require('iconv-lite');
 
+// 允许 main.js 注入 env 配置（如 TAVILY_API_KEY 等）
+let _envConfig = {};
+function setEnvConfig(env) { _envConfig = env || {}; }
+
 // 读文件 + 自动识别编码（UTF-8 BOM / UTF-16 LE/BE / 严格 UTF-8 / GBK 兜底）
 function readTextSmart(filePath) {
   const buf = fs.readFileSync(filePath);
@@ -262,7 +266,7 @@ function bash(input, ctx) {
     try {
       proc = spawn(shell, shellArgs, {
         cwd: ctx.workDir || process.cwd(),
-        env: process.env,
+        env: { ...process.env, ..._envConfig },
         windowsHide: true,
       });
     } catch (err) {
@@ -874,4 +878,4 @@ async function executeTool(toolName, input, context = {}) {
   return { error: `Unknown tool: ${toolName}` };
 }
 
-module.exports = { executeTool, taskStore, taskGetAll, taskClearAll, readTextSmart };
+module.exports = { executeTool, taskStore, taskGetAll, taskClearAll, readTextSmart, setEnvConfig };
