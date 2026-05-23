@@ -132,7 +132,6 @@ class McpClient {
         buffer = buffer.replace(/\r\n/g, '\n');
         const events = buffer.split('\n\n');
         buffer = events.pop() || '';
-        buffer = events.pop() || '';
 
         for (const event of events) {
           const lines = event.split('\n');
