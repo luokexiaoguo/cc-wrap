@@ -249,6 +249,30 @@ function detectWinShell() {
   return null;
 }
 
+// Windows 上探测真正的 Python 路径（绕过 WindowsApps Store 中转器）
+let _realPythonPath = null;
+function detectRealPythonPath() {
+  if (_realPythonPath !== null) return _realPythonPath;
+  if (process.platform !== 'win32') { _realPythonPath = ''; return ''; }
+  try {
+    const pythonDir = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python');
+    if (!fs.existsSync(pythonDir)) { _realPythonPath = ''; return ''; }
+    const versions = fs.readdirSync(pythonDir)
+      .filter(d => /^Python\d+$/.test(d))
+      .sort()
+      .reverse(); // 取最新版本
+    for (const ver of versions) {
+      const exe = path.join(pythonDir, ver, 'python.exe');
+      if (fs.existsSync(exe)) {
+        _realPythonPath = path.join(pythonDir, ver);
+        return _realPythonPath;
+      }
+    }
+  } catch (_) {}
+  _realPythonPath = '';
+  return '';
+}
+
 function bash(input, ctx) {
   const { command, timeout = 120000 } = input;
   if (!command) return { error: 'command is required' };
@@ -262,11 +286,28 @@ function bash(input, ctx) {
     const useBash = !isWin || (shell && /bash(\.exe)?$/i.test(shell));
     const shellArgs = useBash ? ['-c', command] : ['/d', '/s', '/c', command];
 
+    // 确保真正的 Python 路径在 PATH 中，避免 WindowsApps Store 中转器拦截 python3
+    let env = { ...process.env, ..._envConfig };
+    if (isWin) {
+      const realPy = detectRealPythonPath();
+      if (realPy) {
+        const paths = (env.PATH || '').split(path.delimiter);
+        // 如果真正的 Python 路径不在 PATH 中，或 WindowsApps 在其前面，就前置插入
+        const winAppsIdx = paths.findIndex(p => p.includes('Microsoft\\WindowsApps'));
+        const pyIdx = paths.findIndex(p => p === realPy || p === path.join(realPy, 'Scripts'));
+        if (pyIdx === -1 || (winAppsIdx !== -1 && winAppsIdx < pyIdx)) {
+          const filtered = paths.filter(p => p !== realPy && p !== path.join(realPy, 'Scripts'));
+          filtered.unshift(realPy, path.join(realPy, 'Scripts'));
+          env.PATH = filtered.join(path.delimiter);
+        }
+      }
+    }
+
     let proc;
     try {
       proc = spawn(shell, shellArgs, {
         cwd: ctx.workDir || process.cwd(),
-        env: { ...process.env, ..._envConfig },
+        env,
         windowsHide: true,
       });
     } catch (err) {
