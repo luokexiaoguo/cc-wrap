@@ -45,6 +45,7 @@ Terminal IPC channels (node-pty):
 4. Execute tools sequentially via `tool-executor.js` → send results back as `tool_result` messages
 5. Loop until no more tool calls (max `MAX_ROUNDS = 50` rounds)
 6. Context compression triggers at ~150K tokens (automatic summarization of older messages)
+7. **效率优化**: 工具结果 >3000 字符自动截断；连续 3+ 轮全部失败时自动注入策略提示阻止模型重复试错
 
 **Write/Edit/Bash require user approval** via an IPC permission modal. `alwaysAllowedTools` Set is now **persisted to `config.json`** (not session-only) — `agent-loop.setPersistenceStore(store)` is called from `main.js` to inject the store, and "always allow" choices write through.
 
@@ -86,7 +87,13 @@ Settings has a "日志" tab (`data-stab="logs"`) with search (300ms debounce), r
 
 ### MCP client (`src/main/mcp-client.js`)
 
-JSON-RPC 2.0 over stdio. `McpClient` class handles: spawn, initialize handshake, tools/list, tools/call, auto-reconnect (2 retries). Global management via `connectAllServers()`, `getAllMcpTools()`, `getMcpToolHandler()`. App auto-connects configured servers 2 seconds after startup. `before-quit` uses `tree-kill` to clean up child processes.
+JSON-RPC 2.0 客户端，支持两种传输模式（自动检测）：
+- **stdio**: spawn 子进程，通过 stdin/stdout 通信（传统本地 MCP 服务器）
+- **HTTP/SSE**: `command` 以 `http://` 或 `https://` 开头时自动切换为 HTTP 模式，支持 POST-only（如 Tavily）和 GET+endpoint（标准 Streamable HTTP）两种子协议
+
+`McpClient` class handles: connect, initialize handshake, tools/list, tools/call, auto-reconnect (2 retries). Global management via `connectAllServers()`, `getAllMcpTools()`, `getMcpToolHandler()`. App auto-connects configured servers 2 seconds after startup. `before-quit` cleans up all connections.
+
+**注意**: `add-mcp-from-url` IPC 处理器在 `main.js` 中会先探测 URL 是否为 HTTP MCP 端点（检查响应 Content-Type），如果是则自动添加，否则回退到 HTML 页面解析 `mcpServers` 配置。
 
 ### System Prompt (`src/main/system-prompt.js`)
 
@@ -132,7 +139,7 @@ Bottom panel terminal (VS Code 风格), 通过 `node-pty` + `xterm.js` 实现。
 
 All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 
-- **`config.json`** (electron-store) — defaults seeded in `main.js` Store constructor. Schema includes: `apiKey`, `apiEndpoint`, `defaultModel`, `models[]`, `theme`, `fontSize`, `language`, `maxTokens`, `temperature`, `workDirectory`, `recentProjects[]`, `minimizeToTray`, `chatPaneWidth`, `alwaysAllowedTools[]`, `customSystemPrompt`, `windowBounds`. API keys in `models[]` are encrypted via electron `safeStorage` with `enc:<base64>` prefix; `readDecryptedConfig(store)` is the single entry point in main process for reading a fully-decrypted snapshot.
+- **`config.json`** (electron-store) — defaults seeded in `main.js` Store constructor. Schema includes: `apiKey`, `apiEndpoint`, `defaultModel`, `models[]`, `theme`, `fontSize`, `language`, `maxTokens`, `temperature`, `workDirectory`, `recentProjects[]`, `minimizeToTray`, `chatPaneWidth`, `alwaysAllowedTools[]`, `customSystemPrompt`, `env`, `windowBounds`. API keys in `models[]` are encrypted via electron `safeStorage` with `enc:<base64>` prefix; `readDecryptedConfig(store)` is the single entry point in main process for reading a fully-decrypted snapshot. `env` object is injected into tool-executor via `setEnvConfig()` at startup.
 - **`conversations.json`** — chat history (atomic write + 300ms debounce + `beforeunload` flush + `flushConversations()` called immediately on `agent-complete`). Migrated from `localStorage` on first launch. Each message can have `inputTokens`/`outputTokens` fields; each conversation has `totalInputTokens`/`totalOutputTokens`.
 - **`logs/app.log`** — rolling log file from `logger.js` (5MB rotation).
 - **`memory.json`** — user memories (manual + auto-extracted)

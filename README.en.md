@@ -1,89 +1,209 @@
 [中文](README.md)
 
-# cc-wrap — Claude Code Desktop (Chinese-first)
+# cc-wrap — Claude Code Desktop
 
-A lightweight Electron desktop app that brings Claude Code CLI's core capabilities into a GUI — Chinese-first interface, zero-friction third-party model setup, warm Claude-branded UI. Currently shipping a Windows NSIS installer.
+> Visual AI Agent Workbench · Open Source · Multi-Model · MCP Ecosystem
+
+cc-wrap is a desktop wrapper for [Claude Code](https://claude.ai/code), combining the official CLI's agent loop engine with a full graphical interface. No more terminal commands — manage file operations, command execution, code search, and tool extensions through a windowed UI.
 
 ![Interface](./screenshots/interface.jpg)
 
-## What This Project Does
+---
 
-The official Claude Code desktop client has two pain points: incomplete Chinese support and complex third-party model configuration. cc-wrap solves both — and brings the full CLI capability surface (agent loop, tool calls, MCP extensions, memory/skills) into a GUI so developers unfamiliar with the command line can still use it.
+## Highlights
 
-## Core Features
+### 🤖 True Agent Loop
+
+AI autonomously decides which tools to call, collaborating across multiple rounds.
+
+- Send a request, AI reads/writes files, executes commands, searches code — all on its own
+- Real-time streaming output for every thought and action
+- Auto context compression (>150K tokens triggers summarization)
+- Stuck detection: auto-injects strategy hints after consecutive failures
+- Tool result truncation: >3000 chars auto-truncated to prevent context overflow
+
+### 🌐 Multi-Model Support
+
+All major models, no client switching:
+
+| Model | Protocol |
+|-------|----------|
+| Claude (Opus / Sonnet / Haiku) | Anthropic Messages API |
+| GPT-4o / GPT-4 | OpenAI Chat API |
+| DeepSeek (Chat / Reasoner) | OpenAI Compatible |
+| Qwen | OpenAI Compatible |
+| MiniMax | OpenAI Compatible |
+| GLM-4v / Step-1v | OpenAI Compatible |
+
+Dual protocol auto-detection: Anthropic format uses `/v1/messages` SSE, OpenAI format uses `/v1/chat/completions` streaming. Non-vision models auto-strip image blocks to avoid 400 errors.
+
+### 🔌 MCP Ecosystem
+
+Full [Model Context Protocol](https://modelcontextprotocol.io/) support with two transport modes:
+
+- **stdio** — Local MCP servers (Node.js / Python) via subprocess stdin/stdout
+- **HTTP/SSE** — Remote MCP services (e.g. Tavily Search), paste URL to connect, auto-detects Streamable HTTP / POST-only modes
+
+Dozens of ready-to-use MCP servers: Tavily search, MiniMax vision, filesystem, databases, maps, and more.
+
+### 💻 Integrated Terminal
+
+`` Ctrl+` `` to toggle, powered by `node-pty` + `xterm.js`:
+
+- Real PTY process (cmd.exe / PowerShell)
+- Draggable panel, process persists when panel is closed
+- Run git, install packages, check logs — never leave the window
+
+### 📋 Task Panel
+
+AI auto-decomposes complex requests into subtasks with real-time progress:
+
+- Done / In Progress / Pending status at a glance
+- Click to toggle task state, manual intervention supported
+- Clear tracking across multi-round tasks
+
+### 🧠 Memory System
+
+AI auto-extracts key information for cross-conversation persistence.
+
+- Tech stack, preferences, project context auto-saved
+- Manual add / manage / delete
+- Auto-injected into every conversation
+
+### 🎯 Skills Extension
+
+Inject domain knowledge into System Prompt.
+
+- Custom skills (name + description + prompt + trigger keywords)
+- Always-active or keyword-triggered modes
+- Built-in skill manager, third-party skill import
+- Vendor onboarding auto-registration flow
+
+---
+
+## Complete Feature List
 
 | Feature | Description |
 |---------|-------------|
-| 🌐 Chinese-first UI | Fully localized interface, 14 slash commands (`/help` `/clear` `/model` `/memory` `/mcp` `/skill` `/theme` `/export` `/init` `/cost` `/permissions` `/tools` `/workdir` `/compact`) |
-| 🔧 Model Switching | Dropdown selector, **automatic Anthropic / OpenAI format detection**, drop-in third-party model support |
-| 📁 File Operations | Read · Write · Edit · Glob · Grep with automatic UTF-8/UTF-16/GBK detection; workspace file tree with context menu |
-| 🔨 Bash Commands | Non-blocking execution, cancellable, with custom cwd / shell / env context |
-| 🔌 MCP Extensions | Standard JSON-RPC over stdio; ready-to-fill examples embedded in the dialog (MiniMax / filesystem / Amap, etc.) |
-| 🧩 Skills Injection | Custom prompt templates injected into System Prompt; supports auto-import from URL |
-| 💾 Memory System | Cross-conversation persistence for preferences and project context, auto-extracted + manual |
-| 📋 Plan UI Task Panel | Large tasks auto-decomposed, progress visible (○ → ◐ → ✓), manually toggleable |
-| 🖼️ Image Recognition | Paste / drag-and-drop, auto-saved to disk for MCP tool access; non-vision models auto-strip images |
-| 📡 Streaming Output | Real-time agent execution, incremental tool-call rendering, visible "thinking..." indicator |
-| 🛡️ Permission Management | Confirmation modal for Write / Edit / Bash; "always allow" persists across restarts |
-| 📊 Token Statistics | Per-message token display (↑input · ↓output), `/cost` for per-conversation and global breakdown |
-| 📝 Log Viewer | Built-in log panel in Settings with search, refresh, export; 5MB auto-rotation |
-| 🗑️ Cache Cleanup | One-click cleanup of pasted images, conversation history, logs, and other cached data |
-| 🎨 Warm Theme | Claude-branded palette, light & dark modes, adjustable font size (12-20px) |
-| 🌐 Language Switch | Instant Chinese/English toggle — no restart needed |
-| 🔄 Failure Retry | Failed API calls highlight the message with a one-click retry button |
-| ⌨️ System Tray | Close minimizes to tray; right-click menu for new conversation, settings, etc. |
+| Agent Loop | Multi-round tool calls, streaming output, auto-compression, stuck detection |
+| File Ops | Read / Write / Edit / Glob / Grep, auto encoding detection (UTF-8 / GBK / UTF-16) |
+| Bash | Non-blocking spawn, cancellable, custom cwd/shell/env |
+| Multi-Model | Anthropic + OpenAI dual protocol, vision model auto-detection |
+| MCP | stdio + HTTP/SSE dual mode, auto-reconnect, Chinese config examples |
+| Integrated Terminal | Ctrl+` toggle, node-pty real terminal, draggable panel |
+| Task Panel | Auto task decomposition, progress tracking, manual intervention |
+| Memory | Auto-extract + manual manage, cross-conversation persistence |
+| Skills | Custom prompt injection, keyword / always-active activation |
+| File Editor | Syntax highlighting, line numbers, find/replace, Markdown preview, file tree |
+| Image Recognition | Paste/drag-drop auto-save, vision model / MCP tool dual path |
+| Dual Theme | Claude warm dark + cream light, adjustable font size |
+| i18n | Chinese / English instant switch |
+| Token Stats | Per-message ↑↓ display, `/cost` for full breakdown |
+| Permissions | Write / Edit / Bash confirmation modal, "always allow" persists |
+| System Tray | Minimizes on close, right-click menu for new/settings/show/hide |
+| Log Viewer | Built-in panel with search, clear, export; 5MB auto-rotation |
+| Conversations | New, switch, delete, export to Markdown |
+| Slash Commands | `/help` `/clear` `/model` `/memory` `/mcp` `/skill` `/theme` `/export` `/cost` |
+| Hotkeys | `Ctrl+P` open file, `Ctrl+S` save, `Esc` stop, `` Ctrl+` `` terminal, `Ctrl+Shift+E` export |
+| Cache Cleanup | One-click cleanup of pasted images, history, logs |
+| Retry on Failure | Failed API calls highlight message with one-click retry |
 
-## Supported Models
+---
 
-Any API compatible with these formats works:
+## Installation
 
-- **Anthropic format**: `/v1/messages`, streaming SSE
-- **OpenAI format**: `/v1/chat/completions`, streaming chunks (with `tool_calls`)
+### Download Installer
 
-Tested with: Claude series, DeepSeek series, Qwen / Qwen-VL, MiniMax / MiniMax-VL, GLM-4v, Step-1v, and more.
+Download the latest `cc-wrap Setup X.Y.Z.exe` from [Releases](https://github.com/luokexiaoguo/cc-wrap/releases).
 
-## Quick Start
+### From Source
 
 ```bash
 git clone <repo>
-cd claude-desktop
+cd cc-wrap
 npm install
-npm start             # Development mode
-npm run build         # Build Windows NSIS installer into dist/
+npm run rebuild    # Compile native modules (node-pty)
+npm start          # Development mode
+npm run build      # Package NSIS installer to dist/
 ```
+
+---
+
+## Configuration
+
+Config file: `%APPDATA%/cc-wrap/config.json`
+
+- API keys encrypted via Electron `safeStorage`
+- Model list, theme, font size, language, work directory, recent projects
+- Always-allowed tools list, custom system prompt, environment variable injection
+
+MCP config: `%APPDATA%/cc-wrap/mcp-servers.json`
+
+---
 
 ## Architecture
 
 ```
-┌──────────────────┐     ┌──────────────────┐
-│   Renderer       │     │    Main Process  │
-│   (Chromium)     │◄────│   (Node.js)      │
-│                  │ IPC │                  │
-│  - Chat UI       │     │  - Agent Loop    │
-│  - File Tree     │     │  - API Client    │
-│  - Editor        │     │  - Tool Executor │
-│  - Task Panel    │     │  - MCP Client    │
-└──────────────────┘     └──────────────────┘
-         ▲                        ▲
-         │               ┌────────┴────────┐
-         └──────────────►│   preload.js    │
-            contextBridge (whitelist IPC + sandbox)
+┌───────────────┐      IPC (contextBridge)       ┌──────────────────┐
+│  Main Process  │ ◄────────────────────────────► │ Renderer Process │
+│  (Node.js)     │      preload.js whitelist      │ (Chromium)       │
+│                │                                │                  │
+│  ├─ main.js    │                                │  ├─ app.js       │
+│  ├─ agent-loop │   terminal-output (push)       │  ├─ index.html   │
+│  ├─ api-client │   terminal-write (invoke)      │  ├─ main.css     │
+│  ├─ tools.js   │   terminal-spawn (invoke)      │  └─ xterm.js     │
+│  ├─ tool-exec  │   agent-stream-text (push)     │                  │
+│  ├─ mcp-client │   agent-permission (push)      │  Terminal        │
+│  ├─ system-prom│   ...                          │  └─ xterm.js     │
+│  ├─ logger.js  │                                │                  │
+│  └─ node-pty   │                                │                  │
+└───────────────┘                                └──────────────────┘
 ```
 
-- **Main**: Window management, agent loop (max 50 rounds, auto context compression at ~150K tokens), API client (Anthropic / OpenAI dual format + vision-model detection), tool executor, MCP client
-- **Renderer**: Chat UI, file tree, settings panel, memory management, task panel, file editor (with image preview)
-- **Preload**: `contextBridge` whitelist isolation — every IPC channel is explicitly registered; non-whitelisted requests are rejected. highlight.js is exposed to the renderer through preload
+**Security**: `nodeIntegration: false`, `contextIsolation: true`, IPC channel whitelisting, CSP `default-src 'self'`.
+
+**Stack**: Electron 28 + vanilla JavaScript (no frontend framework)
+
+---
 
 ## Data Storage
 
-All user data lives under `%APPDATA%/cc-wrap/` (Windows):
-
-- `config.json` — settings (API keys encrypted via Electron `safeStorage`)
-- `conversations.json` — chat history (atomic write + debounce + immediate flush on completion)
-- `memory.json` / `skills.json` / `mcp-servers.json` — per-module JSON
-- `logs/app.log` — runtime logs (5MB auto-rotation)
-- `pasted-images/` — auto-saved pasted images
+| File | Path |
+|------|------|
+| `config.json` | `%APPDATA%/cc-wrap/` |
+| `conversations.json` | `%APPDATA%/cc-wrap/` |
+| `memory.json` | `%APPDATA%/cc-wrap/` |
+| `skills.json` | `%APPDATA%/cc-wrap/` |
+| `mcp-servers.json` | `%APPDATA%/cc-wrap/` |
+| `logs/app.log` | `%APPDATA%/cc-wrap/` |
+| `pasted-images/` | `%APPDATA%/cc-wrap/` |
 
 ---
+
+## Known Limitations
+
+1. **Requires API Key** — not ready-to-use; you need your own Claude / GPT API credits
+2. **Early Stage** — v1.1.0, edge cases may be rough
+3. **Developer-Facing** — requires understanding of API / model / MCP concepts
+4. **Model Variance** — Claude has strongest agent capability; other models may be less stable with tool calls
+5. **Local Only** — no cloud sync, no team collaboration
+
+---
+
+## Development
+
+```bash
+npm start          # Development mode
+npm run build      # Package installer
+npm run rebuild    # Recompile native modules
+```
+
+No automated tests. Smoke-test via `npm start` + manual verification.
+
+---
+
+## License
+
+MIT
 
 > ⭐ Star if helpful. Issues and PRs welcome.
