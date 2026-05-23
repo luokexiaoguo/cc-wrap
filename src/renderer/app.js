@@ -4475,7 +4475,6 @@ function renderSkills() {
           : '<span class="skill-badge skill-badge-off" title="仅用 /skill 引用">○ 手动</span>');
     return '<div class="skill-item" data-idx="' + i + '">' +
       '<div class="skill-name">' + esc(s.name) + ' ' + actBadge + '</div>' +
-      '<div class="skill-desc">' + esc(s.description || s.desc || '无描述') + '<br><span style="color:var(--text-secondary);font-size:11px">' + esc(src + trig) + '</span></div>' +
       '<div class="skill-actions">' +
         (s.readonly ? '' :
           '<button class="btn-sm skill-toggle-btn" data-idx="' + i + '" title="' + (s.alwaysActive ? '关闭始终激活' : '设为始终激活') + '">' + (s.alwaysActive ? '⏸ 停用' : '▶ 常驻') + '</button>' +

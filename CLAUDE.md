@@ -65,7 +65,7 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 
 ### Tool system (`src/main/tools.js` + `tool-executor.js`)
 
-13 built-in tools defined in `tools.js` with Anthropic-format `input_schema`: Read, Write, Edit, Glob, Grep, Bash, ListDirectory, WebSearch, WebFetch, Agent, TaskCreate, TaskUpdate, AskUserQuestion.
+14 built-in tools defined in `tools.js` with Anthropic-format `input_schema`: Read, Write, Edit, Glob, Grep, Bash, ListDirectory, WebSearch, WebFetch, Agent, TaskCreate, TaskUpdate, InstallSkill, AskUserQuestion.
 
 `tools.js` exports pure data + helpers (`getEnabledTools`, `mergeTools`, `getOpenAITools`). `tool-executor.js` contains the implementations, dispatched via `TOOL_HANDLERS` map. `executeTool()` checks built-in handlers first, falls back to MCP handlers from `mcp-client.getMcpToolHandler`.
 
@@ -76,6 +76,8 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 **Bash** uses `spawn` (non-blocking, `tree-kill` on cancel). Shell defaults to `process.env.COMSPEC`; can be overridden via `executeTool` context `shell` param.
 
 **Task tools** (`taskCreate` / `taskUpdate`) emit `tasks-changed` IPC to the renderer after each mutation, driving the Plan UI panel. Storage is an in-memory `Map` (`taskStore`), cleared via `clear-tasks` IPC when the user switches conversations.
+
+**InstallSkill** writes SKILL.md to the fixed location `%APPDATA%/cc-wrap/skills/<name>/` (not project-dependent). Supports `files` array parameter for supplementary scripts/configs — each entry `{ path, content }` is written with path-traversal protection. Skills are loaded at startup from two sources: `skills.json` (UI metadata) + disk files in `skills/<name>/SKILL.md` (higher priority, overrides JSON).
 
 ### Logger (`src/main/logger.js`)
 
@@ -143,7 +145,8 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 - **`conversations.json`** — chat history (atomic write + 300ms debounce + `beforeunload` flush + `flushConversations()` called immediately on `agent-complete`). Migrated from `localStorage` on first launch. Each message can have `inputTokens`/`outputTokens` fields; each conversation has `totalInputTokens`/`totalOutputTokens`.
 - **`logs/app.log`** — rolling log file from `logger.js` (5MB rotation).
 - **`memory.json`** — user memories (manual + auto-extracted)
-- **`skills.json`** — Skills definitions
+- **`skills.json`** — Skills metadata (name, description, triggers, alwaysActive; 磁盘 SKILL.md 内容优先级更高)
+- **`skills/<name>/SKILL.md`** — Skill 的 SKILL.md 正文文件，InstallSkill 写入位置，优先级高于 skills.json 中的 content
 - **`mcp-servers.json`** — MCP server configs (NOT in electron-store; raw JSON read/written by `get-mcp-servers` / `save-mcp-servers` IPC handlers in main.js)
 - **`pasted-images/<timestamp>.png`** — when user pastes/drops an image, it's also written to disk (`save-pasted-image` IPC) so MCP tools that accept a file path (`understand_image`, etc.) get a real path. The path is appended to the user's text as a hint in `buildApiMessages`.
 

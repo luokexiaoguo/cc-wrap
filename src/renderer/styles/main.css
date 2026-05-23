@@ -302,26 +302,24 @@ body.light-theme .titlebar-drag { color: var(--text-primary); }
 .dir-arrow { font-size: 9px; width: 12px; text-align: center; flex-shrink: 0; color: var(--text-secondary); }
 
 /* Skills面板 */
-.skill-toolbar { padding: 10px; border-bottom: 1px solid var(--border); }
+.skill-toolbar { padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .skill-list { flex: 1; overflow-y: auto; padding: 4px; }
 .skill-item {
-  padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md);
-  margin-bottom: 8px; cursor: pointer; background: var(--bg-tertiary);
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-md);
+  margin-bottom: 4px; cursor: pointer; background: var(--bg-tertiary);
   transition: all 0.15s;
 }
 .skill-item:hover {
   border-color: var(--accent);
   background: var(--bg-hover);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
 }
-.skill-item .skill-name { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.skill-item .skill-name { font-weight: 600; font-size: 12px; }
 .skill-badge {
   display: inline-block;
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 9px;
-  margin-left: 6px;
+  font-size: 9px;
+  padding: 0 5px;
+  border-radius: 8px;
+  margin-left: 4px;
   vertical-align: 1px;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -329,20 +327,20 @@ body.light-theme .titlebar-drag { color: var(--text-primary); }
 }
 .skill-badge-on { background: var(--accent-soft); color: var(--accent); }
 .skill-badge-off { opacity: 0.7; }
-.skill-item .skill-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.skill-item .skill-desc { display: none; }
 .skill-item .skill-actions {
   display: flex;
-  gap: 4px;
-  margin-top: 8px;
+  gap: 2px;
+  margin-top: 4px;
   flex-wrap: nowrap;
   overflow-x: auto;
 }
 .skill-item .skill-actions::-webkit-scrollbar { height: 4px; }
 .skill-item .skill-actions::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .skill-item .skill-actions .btn-sm {
-  font-size: 11px;
-  padding: 4px 8px;
-  line-height: 1.2;
+  font-size: 10px;
+  padding: 2px 6px;
+  line-height: 1.3;
   white-space: nowrap;
   flex-shrink: 0;
 }
