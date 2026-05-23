@@ -292,7 +292,12 @@ function bash(input, ctx) {
     const winBash = isWin ? detectWinShell() : null;
     const shell = ctx.shell || (isWin ? (winBash || process.env.COMSPEC || 'cmd.exe') : '/bin/sh');
     const useBash = !isWin || (shell && /bash(\.exe)?$/i.test(shell));
-    const shellArgs = useBash ? ['-c', command] : ['/d', '/s', '/c', command];
+    // Windows: python3 命令不存在（标准 Python 只有 python.exe），替换为 python
+    let cmd = command;
+    if (isWin) {
+      cmd = cmd.replace(/\bpython3\b/g, 'python');
+    }
+    const shellArgs = useBash ? ['-c', cmd] : ['/d', '/s', '/c', cmd];
 
     // 确保 Windows 工具路径在 PATH 中（git-bash 非交互模式会丢失很多 Windows PATH 条目）
     let env = { ...process.env, ..._envConfig };
