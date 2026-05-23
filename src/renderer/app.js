@@ -1153,6 +1153,7 @@ function setupEvents() {
 
     saveConversations();
     renderMessages();
+    renderConversations();
 
     // 兜底：agent loop 跑完后静默重拉一次 skills 列表
     // skills-changed IPC 万一漏发（ctx.window 没传、监听器没注册到等），靠这里捞回来
@@ -1409,8 +1410,8 @@ function renderConversations() {
     html += '<div class="conversation-item' + (isActive ? ' active' : '') + (c.pinned ? ' pinned' : '') + '" data-id="' + c.id + '" title="右键查看更多操作">' +
       (c.pinned ? '<span class="pin-icon">📌</span>' : '') +
       '<span class="title">' + esc(c.title) + '</span>' +
-      ((c.totalInputTokens || c.totalOutputTokens)
-        ? '<span class="conv-tokens">↑' + (c.totalInputTokens || 0) + '</span>'
+      ((c.totalInputTokens !== undefined || c.totalOutputTokens !== undefined)
+        ? '<span class="conv-tokens">↑' + (c.totalInputTokens ?? 0) + ' ↓' + (c.totalOutputTokens ?? 0) + '</span>'
         : '') +
       '<button class="del" data-del="' + c.id + '" title="删除">✕</button></div>';
   }
@@ -1785,8 +1786,8 @@ function renderMessages() {
       (msg.isError ? '<button class="msg-action retry-btn" data-idx="' + i + '">↻ 重试</button>' : '') +
       '<button class="msg-action copy-btn" data-idx="' + i + '">复制</button>' +
       (!isUser && !msg.isError ? '<button class="msg-action regen-btn" data-idx="' + i + '">重新生成</button>' : '') + '</div>' +
-      (!isUser && (msg.inputTokens || msg.outputTokens)
-        ? '<div class="msg-tokens">↑' + msg.inputTokens + ' · ↓' + msg.outputTokens + '</div>'
+      (!isUser && (msg.inputTokens !== undefined || msg.outputTokens !== undefined)
+        ? '<div class="msg-tokens">↑' + (msg.inputTokens ?? 0) + ' · ↓' + (msg.outputTokens ?? 0) + '</div>'
         : '') + '</div>';
   }
   messagesEl.innerHTML = html;

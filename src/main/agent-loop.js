@@ -209,8 +209,16 @@ async function runAgentLoop(mainWindow, options) {
               stopReason = reason;
               usage = u;
               if (extra?.reasoning_content) reasoningContent = extra.reasoning_content;
-              if (u.input_tokens) totalUsage.input_tokens += u.input_tokens;
-              if (u.output_tokens) totalUsage.output_tokens += u.output_tokens;
+              // 优先使用 API 返回的 usage，缺失时按字符数估算
+              if (u && (u.input_tokens || u.output_tokens)) {
+                totalUsage.input_tokens += u.input_tokens || 0;
+                totalUsage.output_tokens += u.output_tokens || 0;
+              } else {
+                const estIn = Math.ceil(countChars(currentMessages) / 4);
+                const estOut = Math.ceil(fullText.length / 4);
+                totalUsage.input_tokens += estIn;
+                totalUsage.output_tokens += estOut;
+              }
             }
           }
         );
@@ -387,6 +395,24 @@ function _toolFamily(name, input) {
   if (name === 'WebFetch') return 'http_fetch';
   if (name === 'WebSearch') return 'web_search';
   return name;
+}
+
+/**
+ * 统计消息数组的总字符数（用于 token 估算）
+ */
+function countChars(messages) {
+  let total = 0;
+  for (const msg of messages) {
+    if (typeof msg.content === 'string') total += msg.content.length;
+    else if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        if (block.type === 'text') total += (block.text || '').length;
+        else if (block.type === 'tool_result') total += (block.content || '').length;
+        else if (block.type === 'tool_use') total += JSON.stringify(block.input || '').length;
+      }
+    }
+  }
+  return total;
 }
 
 /**

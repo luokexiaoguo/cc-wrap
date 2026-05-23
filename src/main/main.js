@@ -307,6 +307,14 @@ function createTray() {
     },
     { type: 'separator' },
     {
+      label: '重启',
+      click: () => {
+        app.relaunch();
+        app.isQuitting = true;
+        app.quit();
+      }
+    },
+    {
       label: '退出',
       click: () => {
         app.isQuitting = true;

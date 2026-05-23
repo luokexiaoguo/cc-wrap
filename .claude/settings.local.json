@@ -60,7 +60,25 @@
       "Read(//c/Users/luoke/AppData/Roaming/cc-wrap/**)",
       "Read(//c/Users/luoke/AppData/Roaming/cc-wrap/pasted-images/**)",
       "Bash(git commit *)",
-      "Bash(Get-ChildItem *)"
+      "Bash(Get-ChildItem *)",
+      "Bash(Remove-Item -Path \"E:\\\\openclawPJ\\\\claude-desktop\\\\dist\\\\*.exe\", \"E:\\\\openclawPJ\\\\claude-desktop\\\\dist\\\\*.exe.blockmap\" -ErrorAction SilentlyContinue)",
+      "Bash(Write-Output \"清理完成\")",
+      "Bash(GYP_MSVS_VERSION=2022 npm run rebuild)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(node -e \"console.log\\('Node ABI:', process.versions.modules\\)\")",
+      "PowerShell(Get-VSSetupInstance *)",
+      "PowerShell(npx electron-rebuild --version 28.3.3 --module-dir node_modules/node-pty)",
+      "PowerShell(py *)",
+      "Bash(pkill -f \"electron .\")",
+      "Bash(pkill -f \"cc-wrap\")",
+      "Bash(pkill -f cc-wrap)",
+      "PowerShell(node -e \"try { var m = require\\('xterm'\\); console.log\\('xterm OK:', Object.keys\\(m\\)\\); } catch\\(e\\) { console.log\\('xterm FAIL:', e.message\\) }; try { var f = require\\('@xterm/addon-fit'\\); console.log\\('fit OK:', Object.keys\\(f\\)\\); } catch\\(e\\) { console.log\\('fit FAIL:', e.message\\) }\")",
+      "PowerShell(node -e \"global.self = global; try { var m = require\\('./node_modules/xterm/lib/xterm.js'\\); console.log\\('xterm OK:', Object.keys\\(m\\)\\); } catch\\(e\\) { console.log\\('xterm FAIL:', e.message\\) }\")",
+      "PowerShell(npm start *)",
+      "Bash(Remove-Item -Path \"dist/*.exe\", \"dist/*.exe.blockmap\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Content *)",
+      "Bash(del *)",
+      "PowerShell(Get-Process *)"
     ]
   }
 }
