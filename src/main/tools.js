@@ -158,7 +158,8 @@ const TOOL_DEFINITIONS = [
         description: { type: 'string', description: 'One-line user-facing description of what this skill does.' },
         content: { type: 'string', description: 'Full SKILL.md body (markdown). Document: required CLI commands with examples, parameter conventions, common pitfalls, when to use. Be specific and example-driven — the model in future conversations reads this verbatim.' },
         triggers: { type: 'array', items: { type: 'string' }, description: 'Keywords (Chinese + English) that should auto-activate this skill when present in the user message or attachments. Examples: ["image","图片","识图"] for a vision skill.' },
-        alwaysActive: { type: 'boolean', description: 'Set true only if the user explicitly wants this skill injected on every turn (rare). Default false.' }
+        alwaysActive: { type: 'boolean', description: 'Set true only if the user explicitly wants this skill injected on every turn (rare). Default false.' },
+        files: { type: 'array', items: { type: 'object', properties: { path: { type: 'string', description: 'Relative file path inside skill directory (e.g. "lib/tool.py")' }, content: { type: 'string', description: 'File content' } }, required: ['path', 'content'] }, description: 'Optional supplementary files to install alongside SKILL.md (scripts, configs, etc.)' }
       },
       required: ['name', 'description', 'content']
     }

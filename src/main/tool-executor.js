@@ -637,7 +637,7 @@ function taskGetAll() {
 // ==================== Skill 安装 ====================
 
 async function installSkill(input, ctx) {
-  const { name, description = '', content = '', triggers = [], alwaysActive = false } = input || {};
+  const { name, description = '', content = '', triggers = [], alwaysActive = false, files } = input || {};
   if (!name) return { error: 'name is required' };
   if (!content) return { error: 'content is required (SKILL.md 正文)' };
 
@@ -666,6 +666,21 @@ async function installSkill(input, ctx) {
     const target = path.join(skillDir, 'SKILL.md');
     await fs.promises.writeFile(target, md, 'utf-8');
 
+    // 写入附属文件（scripts, configs, templates 等）
+    if (Array.isArray(files)) {
+      for (const f of files) {
+        if (!f.path || typeof f.content !== 'string') continue;
+        // 防路径穿越：确保解析后的路径在 skillDir 内
+        const fPath = path.resolve(skillDir, f.path);
+        if (!fPath.startsWith(path.resolve(skillDir) + path.sep)) {
+          console.warn('[installSkill] 路径穿越拦截:', f.path);
+          continue;
+        }
+        await fs.promises.mkdir(path.dirname(fPath), { recursive: true });
+        await fs.promises.writeFile(fPath, f.content, 'utf-8');
+      }
+    }
+
     // 通知渲染端刷新 Skill 列表
     // 广播到所有 BrowserWindow，而不是只发给 ctx.window —— 调用路径多了之后
     // ctx.window 有时候会拿不到（execute-tool IPC、子 agent、未来新增的入口）。
@@ -683,14 +698,14 @@ async function installSkill(input, ctx) {
       console.warn('[installSkill] broadcast failed:', e.message);
     }
 
-    return {
-      content:
-        'Skill "' + name + '" 已注册到 cc-wrap。\n' +
-        '路径: ' + target + '\n' +
-        '触发词: ' + (triggerList.length > 0 ? triggerList.join(', ') : '(无)') + '\n' +
-        '常驻: ' + (alwaysActive ? '是' : '否') + '\n' +
-        '用户下次发相关消息时会自动激活；也可在左侧 Skills 面板看到。'
-    };
+    let resultMsg =
+      'Skill "' + name + '" 已注册到 cc-wrap。\n' +
+      '路径: ' + target + '\n' +
+      '触发词: ' + (triggerList.length > 0 ? triggerList.join(', ') : '(无)') + '\n' +
+      '常驻: ' + (alwaysActive ? '是' : '否') + '\n';
+    const fileCount = Array.isArray(files) ? files.length : 0;
+    if (fileCount > 0) resultMsg += '附属文件: ' + fileCount + ' 个\n';
+    return { content: resultMsg + '用户下次发相关消息时会自动激活；也可在左侧 Skills 面板看到。' };
   } catch (err) {
     return { error: '写入失败: ' + err.message };
   }
