@@ -3541,13 +3541,24 @@ async function exportConversation() {
     return;
   }
   var conv = state.currentConversation;
+  var appVer = '';
+  try { appVer = await window.api.invoke('get-app-version'); } catch (_) {}
   var md = '# ' + conv.title + '\n\n';
-  md += '> 导出时间: ' + new Date().toLocaleString('zh-CN') + '\n\n---\n\n';
+  md += '> 导出时间: ' + new Date().toLocaleString('zh-CN');
+  if (appVer) md += '  |  cc-wrap v' + appVer;
+  md += '\n\n';
 
+  var totalIn = 0, totalOut = 0;
   for (var i = 0; i < conv.messages.length; i++) {
     var msg = conv.messages[i];
     var role = msg.role === 'user' ? '**你**' : '**Claude**';
-    md += '### ' + role + '  ' + new Date(msg.timestamp).toLocaleTimeString('zh-CN') + '\n\n';
+    var tokens = '';
+    if (msg.role !== 'user' && (msg.inputTokens !== undefined || msg.outputTokens !== undefined)) {
+      tokens = '  `↑' + (msg.inputTokens ?? 0) + ' · ↓' + (msg.outputTokens ?? 0) + '`';
+      totalIn += msg.inputTokens ?? 0;
+      totalOut += msg.outputTokens ?? 0;
+    }
+    md += '### ' + role + '  ' + new Date(msg.timestamp).toLocaleTimeString('zh-CN') + tokens + '\n\n';
     md += msg.content + '\n\n';
 
     if (msg.toolCalls) {
@@ -3556,6 +3567,9 @@ async function exportConversation() {
         md += '> 工具: ' + tc.name + '\n> ' + tc.input + '\n\n';
       }
     }
+  }
+  if (totalIn || totalOut) {
+    md += '---\n\n**Token 总计:** ↑' + totalIn + ' · ↓' + totalOut + '\n';
   }
 
   var result = await window.api.invoke('export-conversation', md, state.workDir);
