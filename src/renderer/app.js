@@ -4233,6 +4233,7 @@ function renderMemoryList() {
       var idx = parseInt(this.getAttribute('data-idx'));
       state.memories.splice(idx, 1);
       renderMemoryList();
+      window.api.invoke('save-memory', { memories: state.memories });
     };
   });
 }
@@ -4245,6 +4246,7 @@ function addMemory() {
   state.memories.push({ content: text, source: 'manual', createdAt: Date.now() });
   input.value = '';
   renderMemoryList();
+  window.api.invoke('save-memory', { memories: state.memories });
 }
 
 async function saveMemoryContent() {
@@ -4256,6 +4258,7 @@ function clearAllMemory() {
   if (!confirm('确定清空所有记忆？')) return;
   state.memories = [];
   renderMemoryList();
+  window.api.invoke('save-memory', { memories: state.memories });
 }
 
 // 从 URL 自动尝试添加 MCP 服务器
