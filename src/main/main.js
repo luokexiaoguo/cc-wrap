@@ -492,12 +492,12 @@ app.whenReady().then(() => {
 
   ipcMain.handle('tool-edit', (event, filePath, oldString, newString) => {
     try {
-      let content = fs.readFileSync(filePath, 'utf-8');
+      const { content } = readTextWithDetectedEncoding(filePath);
       if (!content.includes(oldString)) {
         return { success: false, error: '未找到要替换的文本' };
       }
-      content = content.replace(oldString, newString);
-      fs.writeFileSync(filePath, content, 'utf-8');
+      const newContent = content.replace(oldString, newString);
+      fs.writeFileSync(filePath, newContent, 'utf-8');
       return { success: true };
     } catch (err) {
       return { success: false, error: err.message };
@@ -1093,7 +1093,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle('execute-tool', async (event, toolName, input) => {
     const { executeTool } = require('./tool-executor');
-    const result = await executeTool(toolName, input, { window: mainWindow });
+    const workDir = store.get('workDirectory');
+    const result = await executeTool(toolName, input, { window: mainWindow, workDir });
     if (result.error) {
       return { success: false, error: result.error };
     }
@@ -1169,7 +1170,7 @@ app.whenReady().then(() => {
     const pty = ptySpawn(shell || process.env.COMSPEC || 'cmd.exe', [], {
       name: 'xterm-256color',
       cols, rows,
-      cwd: cwd || process.cwd(),
+      cwd: cwd || store.get('workDirectory') || process.cwd(),
       env: process.env
     });
     const id = `term_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
