@@ -6,6 +6,7 @@ const { exec, spawn } = require('child_process');
 const Store = require('electron-store');
 const os = require('os');
 const treeKill = require('tree-kill');
+const { spawn: ptySpawn } = require('node-pty');
 const { runAgentLoop, cancelAgentLoop, setPersistenceStore } = require('./agent-loop');
 const mcp = require('./mcp-client');
 const logger = require('./logger');
@@ -81,6 +82,7 @@ const store = new Store({
 setPersistenceStore(store);
 
 let mainWindow;
+const terminals = new Map(); // terminalId → node-pty process
 
 // ========== 工具函数 ==========
 
@@ -1148,6 +1150,43 @@ app.whenReady().then(() => {
     }
   });
 
+  // ========== 集成终端 ==========
+
+  ipcMain.handle('terminal-spawn', (event, options) => {
+    const { shell, cols = 80, rows = 24, cwd } = options || {};
+    const pty = ptySpawn(shell || process.env.COMSPEC || 'cmd.exe', [], {
+      name: 'xterm-256color',
+      cols, rows,
+      cwd: cwd || process.cwd(),
+      env: process.env
+    });
+    const id = `term_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    pty.onData((data) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('terminal-output', { terminalId: id, data });
+      }
+    });
+    pty.onExit(() => { terminals.delete(id); });
+    terminals.set(id, pty);
+    return { terminalId: id };
+  });
+
+  ipcMain.handle('terminal-write', (event, { terminalId, data }) => {
+    const pty = terminals.get(terminalId);
+    if (pty) pty.write(data);
+  });
+
+  ipcMain.handle('terminal-resize', (event, { terminalId, cols, rows }) => {
+    const pty = terminals.get(terminalId);
+    if (pty) pty.resize(cols, rows);
+  });
+
+  ipcMain.handle('terminal-kill', (event, { terminalId }) => {
+    const pty = terminals.get(terminalId);
+    if (pty) { pty.kill(); terminals.delete(terminalId); }
+  });
+
   // ========== 清除缓存 ==========
 
   ipcMain.handle('clear-cache', async (event, type) => {
@@ -1769,8 +1808,10 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
 });
 
-// 应用退出前清理所有 MCP 子进程（防止 Windows 上的进程残留）
+// 应用退出前清理所有 MCP 子进程和终端 pty（防止 Windows 上的进程残留）
 app.on('before-quit', () => {
   app.isQuitting = true;
   try { mcp.closeAll(); } catch (e) { console.error('[MCP] 退出清理失败:', e.message); }
+  for (const [, pty] of terminals) { try { pty.kill(); } catch (_) {} }
+  terminals.clear();
 });

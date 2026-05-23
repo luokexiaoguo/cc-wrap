@@ -22,13 +22,20 @@ Electron 28 desktop app (cc-wrap, port of Claude Code CLI). `nodeIntegration: fa
 
 - **Main process** (`src/main/`) — Node.js backend: window management, IPC handlers, agent loop, API calls, tool execution, MCP client, tray, persistence
 - **Renderer process** (`src/renderer/`) — Chromium frontend: chat UI, settings, memory management, file editor, file tree, task panel
-- **Preload** (`src/preload.js`) — contextBridge exposing `window.api` with whitelisted IPC channels + `window.api.highlight` (highlight.js façade)
+- **Preload** (`src/preload.js`) — contextBridge exposing `window.api` with whitelisted IPC channels + `window.api.highlight` (highlight.js façade) + `window.api.xterm` (标志位，告知渲染进程终端库已由页面 script 标签加载)
 
 ### Security & IPC whitelisting (`src/preload.js`)
 
 All renderer→main IPC goes through `window.api.invoke(channel, ...args)`. Channels not in `INVOKE_CHANNELS` are silently rejected. `SEND_CHANNELS` and `ON_CHANNELS` similarly gate `window.api.send()` (renderer→main fire-and-forget) and `window.api.on()` (main→renderer subscriptions). Clipboard is exposed as `window.api.clipboard.writeText(text)`. highlight.js is exposed as `window.api.highlight.highlight(code, lang)` returning HTML; renderer never gets the raw module.
 
 **When adding a new IPC channel, it MUST be added to the appropriate whitelist in `preload.js`.** Anything else gets logged and rejected.
+
+Terminal IPC channels (node-pty):
+- `terminal-spawn` (invoke) — 创建新的 PTY 进程，返回 terminalId
+- `terminal-write` (invoke) — 向 PTY 写入数据（用户键盘输入）
+- `terminal-resize` (invoke) — 调整 PTY 大小（cols/rows）
+- `terminal-kill` (invoke) — 杀死 PTY 进程
+- `terminal-output` (on) — PTY 输出推送到渲染进程
 
 ### Agent Loop (`src/main/agent-loop.js`)
 
@@ -105,6 +112,21 @@ Function-based, no framework.
 **Layout switching**: `.main-content.editor-open` class toggles split view — chat-pane shrinks to a right sidebar (width persisted in config as `chatPaneWidth`, draggable via `chatPaneResizer`), editor-panel takes the rest. Without `editor-open`, chat occupies the full main area. The `.body-split` container and `.chat-pane` wrapper must remain intact for this to work.
 
 **Plan UI** (task panel) sits between toolbar and `.body-split`, not in `.chat-area` — so it doesn't scroll with chat content. Hidden by default, auto-shows when `state.tasks` has entries (driven by `tasks-changed` IPC). Click task to cycle status pending → in_progress → completed → pending (calls `execute-tool` with `TaskUpdate`).
+
+### Integrated Terminal
+
+Bottom panel terminal (VS Code 风格), 通过 `node-pty` + `xterm.js` 实现。
+
+**架构**: main 进程用 `node-pty` spawn shell（cmd.exe），PTY output 通过 `terminal-output` IPC 推送到渲染进程。渲染进程用 xterm.js 渲染终端界面，用户输入通过 `terminal-write` IPC 发回 main 进程写入 PTY。
+
+**xterm 加载方式**: xterm.js 和 @xterm/addon-fit 的 UMD 包放在 `src/renderer/lib/` 下，通过 HTML `<script>` 标签加载（而非 preload require），因为 xterm 初始化时访问 `document`，而 preload 执行时 DOM 尚未就绪。CSP `script-src 'self'` 允许同目录脚本。
+
+**注意点**:
+- 终端面板固定在 chat-area 和 input-area 之间，通过 flex 布局嵌入
+- 拖拽调整大小使用 `.resizer-horizontal`（在终端面板上方），拖拽方向：向上拖拽增大终端高度
+- 关闭面板再打开时终端进程保持，重新 attach
+- `Ctrl+`` 快捷键切换终端面板
+- 需要 `electron-rebuild` 重新编译 node-pty 原生模块
 
 ## Persistence layout
 

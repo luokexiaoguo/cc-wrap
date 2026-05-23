@@ -6,6 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'">
   <title>cc-wrap</title>
   <link rel="stylesheet" href="styles/main.css">
+  <link rel="stylesheet" href="../../node_modules/xterm/css/xterm.css">
 </head>
 <body>
   <!-- 自定义标题栏 -->
@@ -175,6 +176,7 @@
                   <div class="shortcut-item"><kbd>Esc</kbd><span class="sd">停止生成</span></div>
                   <div class="shortcut-item"><kbd>End</kbd><span class="sd">滚动到底部</span></div>
                   <div class="shortcut-item"><kbd>Ctrl+Shift+E</kbd><span class="sd">导出对话</span></div>
+                  <div class="shortcut-item"><kbd>Ctrl+`</kbd><span class="sd">终端面板</span></div>
                 </div>
               </div>
 
@@ -200,6 +202,21 @@
           <button class="scroll-to-bottom" id="scrollBottomBtn" style="display:none" title="滚动到底部 (End)">↓</button>
         </div>
 
+        <!-- 终端面板 -->
+        <div id="terminalResizer" class="resizer-horizontal" style="display:none"></div>
+        <div id="terminalPanel" class="terminal-panel" style="display:none">
+          <div class="terminal-header">
+            <span class="terminal-tabs">
+              <span class="terminal-tab active">终端</span>
+            </span>
+            <span class="terminal-header-actions">
+              <button id="terminalToggleBtn" class="terminal-btn" title="新建终端">+</button>
+              <button id="terminalCloseBtn" class="terminal-btn" title="关闭终端面板">✕</button>
+            </span>
+          </div>
+          <div id="terminalContainer" class="terminal-container"></div>
+        </div>
+
         <div class="input-area">
           <!-- 思考/工具调用状态条 -->
           <div class="thinking-indicator" id="thinkingIndicator" style="display:none">
@@ -214,6 +231,7 @@
             <textarea id="messageInput" placeholder="输入消息... (Enter 发送, Ctrl+V 粘贴图片)" rows="1"></textarea>
             <div class="input-actions">
               <button id="attachBtn" class="btn-attach" title="上传附件（图片 / PDF / 文本 / 代码 …，支持多选）">📎</button>
+              <button id="terminalPanelBtn" class="btn-attach btn-term" title="终端 (Ctrl+`)">终端</button>
               <button id="sendBtn" class="btn-send"><span class="send-icon">➤</span></button>
               <button id="stopBtn" class="btn-stop" style="display:none" title="停止生成 (Escape)">⏹</button>
             </div>
@@ -416,6 +434,8 @@
     </div>
   </div>
 
+  <script src="lib/xterm.js"></script>
+  <script src="lib/xterm-addon-fit.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

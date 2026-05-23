@@ -671,15 +671,150 @@ function askUserQuestion(input, ctx) {
   });
 }
 
-// ==================== 子代理（占位）====================
+// ==================== 子代理（独立上下文窗口）====================
 
-async function agent(input) {
+async function agent(input, ctx) {
   const { prompt, description } = input;
   if (!prompt) return { error: 'prompt is required' };
 
-  return {
-    content: `子代理任务: ${description || '未指定描述'}\n提示: ${prompt}\n\n注意: 完整的子代理功能需要独立的上下文窗口支持，当前为占位实现。`
+  const { workDir, signal, window: mainWindow, apiConfig, toolCallId } = ctx;
+  if (!apiConfig || !apiConfig.apiKey) {
+    return { error: '子 Agent 启动失败：API 配置未传入' };
+  }
+
+  // IPC 广播辅助：向渲染端发送子 Agent 事件，附带 subAgentId 用于路由到父工具卡片
+  const sendSub = (channel, data) => {
+    if (mainWindow && mainWindow.webContents && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, { ...data, subAgentId: toolCallId });
+    }
   };
+
+  try {
+    const { buildSystemPrompt } = require('./system-prompt');
+    const { getEnabledTools, mergeTools } = require('./tools');
+    const { callAPIStream } = require('./api-client');
+
+    // 1. 构建系统提示
+    const { app } = require('electron');
+    let memories = [];
+    try {
+      const memPath = path.join(app.getPath('userData'), 'memory.json');
+      const memData = JSON.parse(fs.readFileSync(memPath, 'utf-8'));
+      memories = Array.isArray(memData.memories) ? memData.memories : [];
+    } catch (_) {}
+
+    const system = buildSystemPrompt({
+      workDir: workDir || process.cwd(),
+      memories,
+      activeSkills: [],
+      customPrompt: ''
+    }) + '\n\n你是 cc-wrap 的子代理任务，专注于执行分配给你的任务。完成后简要汇报结果。';
+
+    // 2. 获取工具定义（内置 + MCP）
+    const builtinTools = getEnabledTools();
+    let mcpTools = [];
+    try {
+      const mcpClient = require('./mcp-client');
+      mcpTools = mcpClient.getAllMcpTools ? (mcpClient.getAllMcpTools() || []) : [];
+    } catch (_) {}
+    const tools = mergeTools(builtinTools, mcpTools);
+
+    // 3. 初始化子对话上下文
+    const subMessages = [
+      { role: 'user', content: prompt }
+    ];
+
+    // 4. 子 Agent 主循环
+    const MAX_SUB_ROUNDS = 20;
+    const subAbort = new AbortController();
+    if (signal) {
+      if (signal.aborted) return { error: '已取消' };
+      signal.addEventListener('abort', () => { try { subAbort.abort(); } catch (_) {} }, { once: true });
+    }
+
+    let round = 0;
+    let finalText = '';
+
+    while (round < MAX_SUB_ROUNDS) {
+      if (subAbort.signal.aborted) return { error: '已取消' };
+      round++;
+
+      let fullText = '';
+      const toolCalls = [];
+      let stopReason = 'end_turn';
+
+      try {
+        await callAPIStream(
+          subMessages,
+          tools,
+          system,
+          { ...apiConfig, signal: subAbort.signal },
+          {
+            onText: (text) => {
+              fullText += text;
+              // 实时推送到渲染端
+              sendSub('agent-stream-text', { text });
+            },
+            onToolUse: (id, name, input) => {
+              toolCalls.push({ id, name, input });
+              sendSub('agent-stream-tool-start', { id, name, input });
+            },
+            onComplete: (reason) => { stopReason = reason; }
+          }
+        );
+      } catch (err) {
+        if (subAbort.signal.aborted || err.name === 'AbortError') return { error: '已取消' };
+        return { error: `子 Agent API 调用失败: ${err.message}` };
+      }
+
+      if (fullText) finalText = fullText;
+
+      // 添加助手消息
+      const assistantContent = [];
+      if (fullText) assistantContent.push({ type: 'text', text: fullText });
+      for (const tc of toolCalls) {
+        assistantContent.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
+      }
+      if (assistantContent.length > 0) {
+        subMessages.push({ role: 'assistant', content: assistantContent });
+      }
+
+      // 无工具调用 → 结束
+      if (toolCalls.length === 0 || stopReason !== 'tool_use') {
+        return { content: finalText || '(子 Agent 完成，无文本输出)' };
+      }
+
+      // 执行工具
+      const toolResults = [];
+      for (const tc of toolCalls) {
+        if (subAbort.signal.aborted) break;
+        try {
+          const result = await executeTool(tc.name, tc.input, {
+            workDir,
+            signal: subAbort.signal,
+            window: mainWindow,
+            apiConfig,
+          });
+          const content = result.error
+            ? `错误: ${result.error}`
+            : (typeof result.content === 'string' ? result.content : JSON.stringify(result));
+          toolResults.push({ type: 'tool_result', tool_use_id: tc.id, content });
+          sendSub('agent-stream-tool-result', { id: tc.id, name: tc.name, result: content, error: !!result.error });
+        } catch (err) {
+          toolResults.push({ type: 'tool_result', tool_use_id: tc.id, content: `工具执行失败: ${err.message}` });
+          sendSub('agent-stream-tool-result', { id: tc.id, name: tc.name, result: `工具执行失败: ${err.message}`, error: true });
+        }
+      }
+      if (toolResults.length > 0) {
+        subMessages.push({ role: 'user', content: toolResults });
+      }
+    }
+
+    return { content: finalText || `(子 Agent 执行超过 ${MAX_SUB_ROUNDS} 轮，已截断)` };
+
+  } catch (err) {
+    return { error: `子 Agent 错误: ${err.message}` };
+  }
 }
 
 // ==================== 统一调度 ====================
@@ -713,6 +848,8 @@ async function executeTool(toolName, input, context = {}) {
     shell: context.shell,
     signal: context.signal,
     window: context.window,
+    apiConfig: context.apiConfig,
+    toolCallId: context.toolCallId,
   };
 
   const handler = TOOL_HANDLERS[toolName];

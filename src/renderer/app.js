@@ -140,7 +140,12 @@ const state = {
   activeFileIndex: -1, // 当前激活的文件索引
   // Agent loop 状态
   currentLoopId: null,
-  agentMessages: []    // Anthropic 格式的消息历史
+  agentMessages: [],   // Anthropic 格式的消息历史
+  // 终端状态
+  terminal: null,
+  terminalFit: null,
+  terminalId: null,
+  terminalActive: false
 };
 
 // 斜杠命令定义
@@ -776,6 +781,11 @@ function setupEvents() {
         toggleFindBar();
       }
     }
+    // 终端开关 Ctrl+`
+    if ((e.ctrlKey || e.metaKey) && e.key === '`') {
+      e.preventDefault();
+      toggleTerminal();
+    }
   });
 
   // 设置标签
@@ -843,6 +853,38 @@ function setupEvents() {
 
   // 流式文本 — 直接追加到最后一个消息的 DOM，避免全量重绘
   window.api.on('agent-stream-text', function(data) {
+    // 子 Agent 文本 → 路由到父工具卡片内的 subagent 容器
+    if (data.subAgentId) {
+      var messagesEl = $('messages');
+      if (!messagesEl) return;
+      var parentCard = messagesEl.querySelector('.tool-call[data-tc-id="' + esc(data.subAgentId) + '"]');
+      if (!parentCard) return;
+      var body = parentCard.querySelector('.tool-call-body');
+      if (!body) return;
+      var container = body.querySelector('.tool-call-subagent');
+      if (!container) {
+        container = document.createElement('div');
+        container.className = 'tool-call-subagent';
+        body.appendChild(container);
+      }
+      container.appendChild(document.createTextNode(data.text));
+      // 累积到数据模型以便 re-render
+      var conv = state.currentConversation;
+      if (conv) {
+        var lastMsg = conv.messages[conv.messages.length - 1];
+        if (lastMsg && lastMsg.toolCalls) {
+          var parentTc = lastMsg.toolCalls.find(function(t) { return t.id === data.subAgentId; });
+          if (parentTc) {
+            if (!parentTc.subAgentEvents) parentTc.subAgentEvents = [];
+            parentTc.subAgentEvents.push({ type: 'text', text: data.text });
+          }
+        }
+      }
+      var chatArea = $('chatArea');
+      if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
+      return;
+    }
+
     var conv = state.currentConversation;
     if (!conv) return;
     var lastMsg = conv.messages[conv.messages.length - 1];
@@ -868,6 +910,45 @@ function setupEvents() {
 
   // 工具调用开始 — 增量插入 DOM，不全量重绘（修复授权弹窗卡顿的核心）
   window.api.on('agent-stream-tool-start', function(data) {
+    // 子 Agent 工具调用 → 嵌套到父工具卡片的 subagent 容器内
+    if (data.subAgentId) {
+      var messagesEl = $('messages');
+      if (!messagesEl) return;
+      var parentCard = messagesEl.querySelector('.tool-call[data-tc-id="' + esc(data.subAgentId) + '"]');
+      if (!parentCard) return;
+      var body = parentCard.querySelector('.tool-call-body');
+      if (!body) return;
+      var container = body.querySelector('.tool-call-subagent');
+      if (!container) {
+        container = document.createElement('div');
+        container.className = 'tool-call-subagent';
+        body.appendChild(container);
+      }
+      var tcObj = {
+        id: data.id,
+        name: data.name,
+        input: JSON.stringify(data.input, null, 2),
+        result: '',
+        status: 'running'
+      };
+      var wrapper = document.createElement('div');
+      wrapper.innerHTML = renderToolCallHTML(tcObj);
+      container.appendChild(wrapper.firstChild);
+      // 累积到数据模型
+      var conv = state.currentConversation;
+      if (conv) {
+        var lastMsg = conv.messages[conv.messages.length - 1];
+        if (lastMsg && lastMsg.toolCalls) {
+          var parentTc = lastMsg.toolCalls.find(function(t) { return t.id === data.subAgentId; });
+          if (parentTc) {
+            if (!parentTc.subAgentEvents) parentTc.subAgentEvents = [];
+            parentTc.subAgentEvents.push({ type: 'tool_start', id: data.id, name: data.name, input: JSON.stringify(data.input, null, 2), status: 'running' });
+          }
+        }
+      }
+      return;
+    }
+
     var conv = state.currentConversation;
     if (!conv) return;
     var lastMsg = conv.messages[conv.messages.length - 1];
@@ -992,6 +1073,30 @@ function setupEvents() {
 
   // 工具调用结果 — 增量更新对应工具卡片
   window.api.on('agent-stream-tool-result', function(data) {
+    // 子 Agent 工具结果 → 更新嵌套卡片 + 累积数据模型
+    if (data.subAgentId) {
+      var tcObj = { result: data.result, status: data.error ? 'error' : 'done' };
+      updateToolCallIncremental(data.id, tcObj);
+      var conv = state.currentConversation;
+      if (conv) {
+        var lastMsg = conv.messages[conv.messages.length - 1];
+        if (lastMsg && lastMsg.toolCalls) {
+          var parentTc = lastMsg.toolCalls.find(function(t) { return t.id === data.subAgentId; });
+          if (parentTc && parentTc.subAgentEvents) {
+            for (var k = parentTc.subAgentEvents.length - 1; k >= 0; k--) {
+              var ev = parentTc.subAgentEvents[k];
+              if (ev.type === 'tool_start' && ev.id === data.id) {
+                ev.status = data.error ? 'error' : 'done';
+                ev.result = data.result;
+                break;
+              }
+            }
+          }
+        }
+      }
+      return;
+    }
+
     var conv = state.currentConversation;
     if (!conv) return;
     var lastMsg = conv.messages[conv.messages.length - 1];
@@ -1135,6 +1240,85 @@ function setupEvents() {
   window.api.on('agent-permission-request', function(data) {
     log('权限请求: ' + data.toolName);
     showPermissionModal(data);
+  });
+
+  // ========== 终端输出 ==========
+  window.api.on('terminal-output', function(data) {
+    if (data.terminalId === state.terminalId && state.terminal) {
+      state.terminal.write(data.data);
+    }
+  });
+
+  // 终端按钮
+  var terminalToggleBtn = $('terminalToggleBtn');
+  if (terminalToggleBtn) {
+    terminalToggleBtn.onclick = function() {
+      // 关闭并重新新建终端
+      if (state.terminalId) {
+        window.api.invoke('terminal-kill', { terminalId: state.terminalId }).catch(function() {});
+      }
+      state.terminal = null;
+      state.terminalFit = null;
+      state.terminalId = null;
+      var container = $('terminalContainer');
+      if (container) container.innerHTML = '';
+      initTerminal();
+    };
+  }
+  var terminalCloseBtn = $('terminalCloseBtn');
+  if (terminalCloseBtn) {
+    terminalCloseBtn.onclick = function() {
+      var panel = document.getElementById('terminalPanel');
+      var resizer = document.getElementById('terminalResizer');
+      if (panel) panel.style.display = 'none';
+      if (resizer) resizer.style.display = 'none';
+      state.terminalActive = false;
+      updateTerminalBtnState();
+    };
+  }
+  // 输入区终端按钮
+  var terminalPanelBtn = $('terminalPanelBtn');
+  if (terminalPanelBtn) {
+    terminalPanelBtn.onclick = function(e) {
+      toggleTerminal();
+    };
+  }
+
+  // ========== 终端面板拖拽 ==========
+  var terminalResizer = $('terminalResizer');
+  if (terminalResizer) {
+    terminalResizer.onmousedown = function(e) {
+      e.preventDefault();
+      this.classList.add('active');
+      var panel = $('terminalPanel');
+      if (!panel) return;
+      var startY = e.clientY;
+      var startHeight = panel.offsetHeight;
+      var chatPane = document.querySelector('.chat-pane');
+
+      function onMove(ev) {
+        if (!chatPane) return;
+        var delta = startY - ev.clientY;
+        var newH = Math.max(100, Math.min(chatPane.offsetHeight * 0.5, startHeight + delta));
+        panel.style.height = newH + 'px';
+        if (state.terminalFit) state.terminalFit.fit();
+      }
+      function onUp() {
+        terminalResizer.classList.remove('active');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        if (state.terminalFit) state.terminalFit.fit();
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    };
+  }
+
+  // 窗口 resize 时 fit 终端
+  window.addEventListener('resize', function() {
+    if (state.terminal && state.terminalFit) {
+      setTimeout(function() { if (state.terminalFit) state.terminalFit.fit(); }, 100);
+    }
   });
 
   // ========== 点击弹窗外部关闭 ==========
@@ -1304,10 +1488,36 @@ function renderToolCallHTML(tc) {
   var statusIcon = tc.status === 'running' ? '<div class="spinner"></div>' : (tc.status === 'error' ? '❌' : '✅');
   // 默认展开：进行中 / 错误；成功完成的默认折叠，避免长结果挤占聊天主体
   var shouldExpand = tc.status === 'running' || tc.status === 'error';
+  // Agent 工具且有子 Agent 事件时默认展开
+  if (tc.name === 'Agent' && tc.subAgentEvents && tc.subAgentEvents.length > 0) shouldExpand = true;
   var resultPreview = '';
   if (tc.result && tc.status !== 'error') {
     var raw = String(tc.result).replace(/\s+/g, ' ').trim();
     if (raw.length > 0) resultPreview = ' · ' + raw.slice(0, 60) + (raw.length > 60 ? '…' : '');
+  }
+  // 子 Agent 事件渲染
+  var subHTML = '';
+  if (tc.name === 'Agent' && tc.subAgentEvents && tc.subAgentEvents.length > 0) {
+    subHTML = '<div class="tool-call-subagent">';
+    for (var k = 0; k < tc.subAgentEvents.length; k++) {
+      var ev = tc.subAgentEvents[k];
+      if (ev.type === 'text') {
+        subHTML += '<div class="subagent-text">' + esc(ev.text) + '</div>';
+      } else if (ev.type === 'tool_start') {
+        var evIcon = ev.status === 'error' ? '❌' : (ev.status === 'done' ? '✅' : '<div class="spinner"></div>');
+        subHTML += '<div class="tool-call ' + (ev.status === 'done' ? 'done' : 'running') + '" data-tc-id="' + esc(ev.id) + '">' +
+          '<div class="tool-call-header">' +
+            '<span class="tool-call-icon">' + evIcon + '</span>' +
+            '<span class="tool-call-name">' + esc(ev.name) + '</span>' +
+          '</div>' +
+          '<div class="tool-call-body">' +
+            '<div class="tool-call-input"><div class="tool-label">输入</div><pre>' + esc(ev.input) + '</pre></div>' +
+            (ev.result ? '<div class="tool-call-result"><div class="tool-label">结果</div><div class="tool-result-content">' + formatToolResult(ev.result) + '</div></div>' : '') +
+          '</div>' +
+        '</div>';
+      }
+    }
+    subHTML += '</div>';
   }
   return '<div class="tool-call ' + statusClass + (shouldExpand ? ' expanded' : '') + '" data-tc-id="' + esc(tc.id || '') + '">' +
     '<div class="tool-call-header">' +
@@ -1318,6 +1528,7 @@ function renderToolCallHTML(tc) {
     '</div>' +
     '<div class="tool-call-body">' +
       '<div class="tool-call-input"><div class="tool-label">输入</div><pre>' + esc(tc.input) + '</pre></div>' +
+      subHTML +
       (tc.result ? '<div class="tool-call-result"><div class="tool-label">结果</div><div class="tool-result-content">' + formatToolResult(tc.result) + '</div></div>' : '') +
     '</div>' +
   '</div>';
@@ -1427,6 +1638,93 @@ function updateWelcomeScreen() {
       if (conv) { state.currentConversation = conv; renderConversations(); renderMessages(); scrollToBottom(); }
     };
   });
+}
+
+// ========== 集成终端 ==========
+
+function initTerminal() {
+  try {
+    if (typeof Terminal === 'undefined' || typeof FitAddon === 'undefined') {
+      showToast('终端库加载失败', 'error');
+      return;
+    }
+    var FA = FitAddon.FitAddon || FitAddon;
+    var fitAddon = new FA();
+    var term = new Terminal({
+      cursorBlink: true,
+      cursorStyle: 'block',
+      fontSize: 13,
+      fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace",
+      theme: {
+        background: '#1f1a15',
+        foreground: '#e8e0d6',
+        cursor: '#d97757',
+        selectionBackground: '#d9775740',
+        black: '#1f1a15', red: '#e06c75', green: '#98c379', yellow: '#d19a66',
+        blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#e8e0d6',
+        brightBlack: '#5c5855', brightRed: '#e06c75', brightGreen: '#98c379',
+        brightYellow: '#d19a66', brightBlue: '#61afef', brightMagenta: '#c678dd',
+        brightCyan: '#56b6c2', brightWhite: '#f5f1eb'
+      }
+    });
+    term.loadAddon(fitAddon);
+    var container = document.getElementById('terminalContainer');
+    term.open(container);
+    fitAddon.fit();
+
+    term.onData(function(data) {
+      if (state.terminalId) {
+        window.api.invoke('terminal-write', { terminalId: state.terminalId, data: data });
+      }
+    });
+
+    window.api.invoke('terminal-spawn', {
+      cols: term.cols,
+      rows: term.rows,
+      cwd: state.workDir || undefined
+    }).then(function(result) {
+      state.terminal = term;
+      state.terminalFit = fitAddon;
+      state.terminalId = result.terminalId;
+    }).catch(function(err) {
+      logError('终端 spawn 失败: ' + err.message);
+      showToast('终端启动失败: ' + err.message, 'error');
+    });
+  } catch (err) {
+    logError('终端初始化失败: ' + err.message);
+    showToast('终端初始化失败: ' + err.message, 'error');
+  }
+}
+
+function toggleTerminal() {
+  var panel = document.getElementById('terminalPanel');
+  var resizer = document.getElementById('terminalResizer');
+  if (!panel || !resizer) return;
+  var isHidden = panel.style.display === 'none' || panel.style.display === '';
+  panel.style.display = isHidden ? 'flex' : 'none';
+  resizer.style.display = isHidden ? 'block' : 'none';
+  state.terminalActive = isHidden;
+  if (isHidden) {
+    if (!state.terminal) {
+      initTerminal();
+    } else {
+      setTimeout(function() {
+        if (state.terminalFit) state.terminalFit.fit();
+      }, 50);
+    }
+  }
+  updateTerminalBtnState();
+}
+
+function updateTerminalBtnState() {
+  var btn = document.getElementById('terminalPanelBtn');
+  if (btn) {
+    if (state.terminalActive) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  }
 }
 
 // 消息渲染

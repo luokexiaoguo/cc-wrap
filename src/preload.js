@@ -24,7 +24,8 @@ const INVOKE_CHANNELS = [
   'get-conversations', 'save-conversations',
   'get-tasks', 'clear-tasks',
   'get-logs', 'clear-logs', 'clear-cache',
-  'export-logs', 'export-conversation'
+  'export-logs', 'export-conversation',
+  'terminal-spawn', 'terminal-write', 'terminal-resize', 'terminal-kill'
 ];
 
 const ON_CHANNELS = [
@@ -34,7 +35,8 @@ const ON_CHANNELS = [
   'auto-memories-extracted', 'mcp-status',
   'tasks-changed', 'skills-changed',
   'agent-question',
-  'tray-new-conversation', 'tray-open-settings'
+  'tray-new-conversation', 'tray-open-settings',
+  'terminal-output'
 ];
 
 const SEND_CHANNELS = [
@@ -91,5 +93,8 @@ contextBridge.exposeInMainWorld('api', {
         return null;
       }
     }
-  } : { available: false }
+  } : { available: false },
+
+  // 终端标志：告知渲染进程终端库已由页面 <script> 标签加载
+  xterm: { available: true }
 });

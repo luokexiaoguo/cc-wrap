@@ -123,6 +123,77 @@ body.light-theme .titlebar-drag { color: var(--text-primary); }
   background: var(--accent);
 }
 
+/* ===== 水平拖拽分隔条（终端面板用） ===== */
+.resizer-horizontal {
+  height: 4px;
+  cursor: row-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s;
+}
+.resizer-horizontal::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: -3px; bottom: -3px;
+}
+.resizer-horizontal:hover, .resizer-horizontal.active {
+  background: var(--accent);
+}
+
+/* ===== 终端面板 ===== */
+.terminal-panel {
+  flex-shrink: 0;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 100px;
+  max-height: 50vh;
+}
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.terminal-tabs { display: flex; align-items: center; gap: 2px; }
+.terminal-tab {
+  padding: 2px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.terminal-tab.active {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.terminal-header-actions { display: flex; gap: 4px; }
+.terminal-btn {
+  background: none; border: none; color: var(--text-secondary);
+  cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 3px;
+  transition: all 0.15s;
+}
+.terminal-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.terminal-container {
+  flex: 1;
+  overflow: hidden;
+  padding: 4px;
+}
+.terminal-panel.hidden { display: none; }
+.terminal-container .xterm { height: 100%; }
+.terminal-container .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-secondary) transparent;
+}
+
 /* ===== 按钮 ===== */
 .btn-icon {
   width: 32px; height: 32px; border-radius: var(--radius-sm); border: none;
@@ -854,6 +925,52 @@ body.light-theme .hl-attr { color: #875826; }
   border-top: 1px solid var(--border);
 }
 .tool-call.expanded .tool-call-body { display: block; }
+
+/* 子 Agent 嵌套工具容器 — 缩进树状展示 */
+.tool-call-subagent {
+  margin: 8px 0 4px 8px;
+  padding: 8px 8px 4px 12px;
+  border-left: 2px solid var(--border);
+  background: rgba(0,0,0,0.06);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 12px;
+}
+body.light-theme .tool-call-subagent {
+  background: rgba(0,0,0,0.02);
+}
+.tool-call-subagent .tool-call {
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.tool-call-subagent .tool-call + .tool-call {
+  margin-top: 3px;
+}
+.tool-call-subagent .tool-call-header {
+  padding: 6px 10px;
+}
+.tool-call-subagent .tool-call-name {
+  font-size: 12px;
+}
+.tool-call-subagent .tool-call-body {
+  padding: 0 10px 10px;
+}
+.tool-call-subagent .tool-call-input pre {
+  font-size: 11px;
+  max-height: 120px;
+}
+.tool-call-subagent .tool-call-toggle {
+  display: none;
+}
+.subagent-text {
+  padding: 4px 2px 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .tool-call-label {
   font-size: 10px;
   font-weight: 700;
@@ -1267,6 +1384,11 @@ body.light-theme .hl-attr { color: #875826; }
   transition: all 0.15s;
 }
 .btn-attach:hover { background: var(--bg-hover); color: var(--accent); }
+.btn-attach.active { background: var(--accent-bg); color: var(--accent); }
+
+.term-btn-icon { font-family: var(--font-mono); font-weight: 700; font-size: 14px; }
+
+.btn-term { width: auto; padding: 0 8px; font-size: 12px; font-weight: 600; }
 
 .btn-send {
   width: 36px; height: 36px; border-radius: 8px; border: none;

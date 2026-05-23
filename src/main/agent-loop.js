@@ -295,6 +295,8 @@ async function runAgentLoop(mainWindow, options) {
           shell: options.shell,
           signal: abortController.signal,
           window: options.window,
+          apiConfig: config,
+          toolCallId: tc.id,
         });
 
         const resultContent = result.error
