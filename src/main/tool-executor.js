@@ -249,28 +249,36 @@ function detectWinShell() {
   return null;
 }
 
-// Windows 上探测真正的 Python 路径（绕过 WindowsApps Store 中转器）
-let _realPythonPath = null;
-function detectRealPythonPath() {
-  if (_realPythonPath !== null) return _realPythonPath;
-  if (process.platform !== 'win32') { _realPythonPath = ''; return ''; }
+// Windows 上检测常见工具的真实路径（绕过 git-bash 非交互模式丢 PATH 的问题）
+const _toolPathCache = {};
+function detectWindowsToolPaths() {
+  if (_toolPathCache._done) return _toolPathCache;
+  _toolPathCache._done = true;
+  if (process.platform !== 'win32') return _toolPathCache;
   try {
-    const pythonDir = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python');
-    if (!fs.existsSync(pythonDir)) { _realPythonPath = ''; return ''; }
-    const versions = fs.readdirSync(pythonDir)
-      .filter(d => /^Python\d+$/.test(d))
-      .sort()
-      .reverse(); // 取最新版本
-    for (const ver of versions) {
-      const exe = path.join(pythonDir, ver, 'python.exe');
-      if (fs.existsSync(exe)) {
-        _realPythonPath = path.join(pythonDir, ver);
-        return _realPythonPath;
+    // Python: LOCALAPPDATA\Programs\Python\Python*\python.exe
+    const pyRoot = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python');
+    if (fs.existsSync(pyRoot)) {
+      const versions = fs.readdirSync(pyRoot).filter(d => /^Python\d+$/.test(d)).sort().reverse();
+      for (const ver of versions) {
+        if (fs.existsSync(path.join(pyRoot, ver, 'python.exe'))) {
+          _toolPathCache.python = path.join(pyRoot, ver);
+          break;
+        }
       }
     }
+    // npm 全局: APPDATA\npm 和 LOCALAPPDATA\npm
+    const appData = process.env.APPDATA || '';
+    if (appData && fs.existsSync(path.join(appData, 'npm'))) {
+      _toolPathCache.npm = path.join(appData, 'npm');
+    }
+    // Node.js: Program Files\nodejs
+    const progFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+    if (fs.existsSync(path.join(progFiles, 'nodejs', 'node.exe'))) {
+      _toolPathCache.nodejs = path.join(progFiles, 'nodejs');
+    }
   } catch (_) {}
-  _realPythonPath = '';
-  return '';
+  return _toolPathCache;
 }
 
 function bash(input, ctx) {
@@ -286,19 +294,43 @@ function bash(input, ctx) {
     const useBash = !isWin || (shell && /bash(\.exe)?$/i.test(shell));
     const shellArgs = useBash ? ['-c', command] : ['/d', '/s', '/c', command];
 
-    // 确保真正的 Python 路径在 PATH 中，避免 WindowsApps Store 中转器拦截 python3
+    // 确保 Windows 工具路径在 PATH 中（git-bash 非交互模式会丢失很多 Windows PATH 条目）
     let env = { ...process.env, ..._envConfig };
     if (isWin) {
-      const realPy = detectRealPythonPath();
-      if (realPy) {
+      const toolPaths = detectWindowsToolPaths();
+      const extraPaths = [];
+      if (toolPaths.python) {
+        extraPaths.push(toolPaths.python, path.join(toolPaths.python, 'Scripts'));
+      }
+      if (toolPaths.npm) {
+        extraPaths.push(toolPaths.npm);
+      }
+      if (toolPaths.nodejs) {
+        extraPaths.push(toolPaths.nodejs);
+      }
+      if (extraPaths.length > 0) {
         const paths = (env.PATH || '').split(path.delimiter);
-        // 如果真正的 Python 路径不在 PATH 中，或 WindowsApps 在其前面，就前置插入
-        const winAppsIdx = paths.findIndex(p => p.includes('Microsoft\\WindowsApps'));
-        const pyIdx = paths.findIndex(p => p === realPy || p === path.join(realPy, 'Scripts'));
-        if (pyIdx === -1 || (winAppsIdx !== -1 && winAppsIdx < pyIdx)) {
-          const filtered = paths.filter(p => p !== realPy && p !== path.join(realPy, 'Scripts'));
-          filtered.unshift(realPy, path.join(realPy, 'Scripts'));
-          env.PATH = filtered.join(path.delimiter);
+        let changed = false;
+        for (const p of extraPaths) {
+          const idx = paths.findIndex(x => x.toLowerCase() === p.toLowerCase());
+          if (idx === -1) {
+            paths.unshift(p);
+            changed = true;
+          }
+        }
+        // 同时确保 WindowsApps（Store 中转器）不排在真实工具路径前面
+        const winAppsIdx = paths.findIndex(x => x.includes('Microsoft\\WindowsApps'));
+        if (changed || (winAppsIdx > 0 && extraPaths.some(ep => {
+          const epIdx = paths.findIndex(x => x.toLowerCase() === ep.toLowerCase());
+          return epIdx !== -1 && epIdx > winAppsIdx;
+        }))) {
+          const winApps = winAppsIdx !== -1 ? paths.splice(winAppsIdx, 1)[0] : null;
+          const insertAt = Math.min(...extraPaths.map(ep => {
+            const i = paths.findIndex(x => x.toLowerCase() === ep.toLowerCase());
+            return i === -1 ? Infinity : i;
+          }));
+          if (winApps) paths.splice(insertAt === Infinity ? paths.length : insertAt, 0, winApps);
+          env.PATH = paths.join(path.delimiter);
         }
       }
     }
