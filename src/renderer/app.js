@@ -1704,19 +1704,20 @@ function initTerminal() {
     term.open(container);
     fitAddon.fit();
 
-    // Ctrl+Shift+C 复制选中文本
+    // Ctrl+Shift+C 复制 / Ctrl+Shift+V 粘贴
     term.attachCustomKeyEventHandler(function(e) {
-      if (e.type === 'keydown' && e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
-        var sel = term.getSelection();
-        if (sel) {
-          window.api.clipboard.writeText(sel);
+      if (e.type === 'keydown' && e.ctrlKey && e.shiftKey) {
+        if (e.code === 'KeyC') {
+          var sel = term.getSelection();
+          if (sel) window.api.clipboard.writeText(sel);
+          return false;
         }
-        return false;
+        if (e.code === 'KeyV') return false; // 走 paste 事件，不发给终端
       }
       return true;
     });
 
-    // 捕获 paste 事件（在 xterm 内部处理之前截获）
+    // 捕获 paste 事件（Ctrl+V / Ctrl+Shift+V 均可触发）
     container.addEventListener('paste', function(e) {
       e.preventDefault();
       e.stopPropagation();
@@ -1725,17 +1726,6 @@ function initTerminal() {
         window.api.invoke('terminal-write', { terminalId: state.terminalId, data: text });
       }
     }, true);
-
-    // 右键粘贴
-    container.addEventListener('contextmenu', function(e) {
-      e.preventDefault();
-      try {
-        var text = window.api.clipboard.readText();
-        if (text && state.terminalId) {
-          window.api.invoke('terminal-write', { terminalId: state.terminalId, data: text });
-        }
-      } catch (_) {}
-    });
 
     term.onData(function(data) {
       if (state.terminalId) {
