@@ -78,7 +78,30 @@
       "Bash(Remove-Item -Path \"dist/*.exe\", \"dist/*.exe.blockmap\" -ErrorAction SilentlyContinue)",
       "PowerShell(Get-Content *)",
       "Bash(del *)",
-      "PowerShell(Get-Process *)"
+      "PowerShell(Get-Process *)",
+      "Bash(rm -f dist/*.exe dist/*.exe.blockmap)",
+      "Bash(ls dist/)",
+      "Bash(get-command python3 *)",
+      "Bash(Select-Object Source)",
+      "PowerShell(& \"C:\\\\Users\\\\luoke\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\python3.exe\" --version 2>&1)",
+      "PowerShell(& \"C:\\\\Users\\\\luoke\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python314\\\\python.exe\" --version 2>&1)",
+      "PowerShell(python3 --version 2>&1)",
+      "PowerShell(Select-String *)",
+      "Read(//c/Users/luoke/AppData/Roaming/npm/**)",
+      "Bash(where python3 *)",
+      "Bash(where python *)",
+      "Bash(Select-Object FullName)",
+      "Bash(Select-Object Name)",
+      "Bash(findstr /i \"mmx path\" \"C:\\\\Users\\\\luoke\\\\AppData\\\\Roaming\\\\cc-wrap\\\\memory.json\")",
+      "Bash(findstr tavily_search *)",
+      "Bash(timeout 5)",
+      "Bash(Get-Process electron *)",
+      "Bash(Select-Object Id, ProcessName)",
+      "Bash(taskkill /F /IM electron.exe)",
+      "Bash(git status *)",
+      "Bash(npx skills *)",
+      "PowerShell(Get-ChildItem *)",
+      "Bash(npm ls *)"
     ]
   }
 }

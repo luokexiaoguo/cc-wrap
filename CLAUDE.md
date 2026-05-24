@@ -103,7 +103,7 @@ Composition order (later overrides earlier semantically): base Claude Code ident
 
 ### Renderer architecture (`src/renderer/app.js`)
 
-Single ~4100-line file holding a global `state` object
+Single ~4200-line file holding a global `state` object
 
 **Token statistics**: `agent-complete` IPC carries `usage: { input_tokens, output_tokens }`. The renderer stores these per assistant message (`inputTokens`/`outputTokens`) and recalculates conversation totals (`totalInputTokens`/`totalOutputTokens`) on every completion. Displayed per-message (`↑N · ↓N`) and in conversation sidebar. `/cost` slash command shows full breakdown per-message and across all conversations.
 
@@ -116,11 +116,17 @@ Function-based, no framework.
 
 **Streaming render**: `agent-stream-text` events append to `.msg-content` as text nodes (with class `streaming` for `white-space: pre-wrap` to preserve newlines). On `agent-complete`, `renderMessages()` re-renders the full message tree with markdown parsed (`formatContent`) — at that point `.streaming` class is cleared. Tool calls use incremental DOM (`appendToolCallIncremental` / `updateToolCallIncremental`, indexed by `data-tc-id`) to avoid full re-renders on every event.
 
+**Tool call folding**: When an assistant message has multiple tool calls, they are grouped into a `.tool-calls-group` wrapper with a clickable `.tool-calls-bar` showing "🛠 N 个工具调用". The `.tool-calls` container inside starts with `display:none`. Clicking the bar calls `toggleToolCalls()` which toggles visibility. Both `renderMessages()` (full render) and `appendToolCallIncremental()` (streaming) create this wrapper. The event handler is bound via `bar.onclick` (not inline `onclick`) to avoid CSP issues with `script-src 'self'`.
+
 **Markdown rendering** (`formatContent`): hand-rolled line-based state machine — headings (#–####, rendered with Serif font), unordered/ordered lists, blockquotes (with `&gt; ` since HTML is escaped first), horizontal rules, GFM tables (header + `|---|` separator), inline code/bold/italic/link, fenced code blocks (placeholder-extracted before escaping, then highlighted via `window.api.highlight.highlight` if available, fallback to regex-based `highlightCode`). Streaming mode bypasses this and uses raw text + pre-wrap.
 
 **Layout switching**: `.main-content.editor-open` class toggles split view — chat-pane shrinks to a right sidebar (width persisted in config as `chatPaneWidth`, draggable via `chatPaneResizer`), editor-panel takes the rest. Without `editor-open`, chat occupies the full main area. The `.body-split` container and `.chat-pane` wrapper must remain intact for this to work.
 
 **Plan UI** (task panel) sits between toolbar and `.body-split`, not in `.chat-area` — so it doesn't scroll with chat content. Hidden by default, auto-shows when `state.tasks` has entries (driven by `tasks-changed` IPC). Click task to cycle status pending → in_progress → completed → pending (calls `execute-tool` with `TaskUpdate`).
+
+**File tree**: `loadFileTree()` calls `get-file-tree` IPC to build sidebar file tree DOM. Must be called explicitly after setting `state.workDir` — the three code paths that do this are `init()` (startup from config), the settings panel "select folder" button, and the `/workdir` slash command. All three were missing `loadFileTree()` calls at one point; any new code path that changes `state.workDir` must also call `loadFileTree()`.
+
+**Scroll-to-bottom button** (`setupScrollToBottom()`, `#scrollBottomBtn`): sits inside `.chat-area` wrapped in a `position:sticky; height:0; overflow:visible` container to avoid clipping by `overflow-y:auto`. `updateBtn()` shows the button when `scrollHeight - scrollTop - clientHeight > 200`, hides otherwise. The JS sets `display: 'inline-flex'` (not `'flex'`) to align inside the `text-align:right` wrapper.
 
 ### Integrated Terminal
 
@@ -172,3 +178,4 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 - **Streaming class cleanup**: `.msg-content.streaming` MUST be removed on every termination path (`agent-complete`, error catch, `stopGeneration`) via `clearStreamingMarks()`. Otherwise subsequent messages render with `pre-wrap` and look broken.
 - **Conversation flush on completion**: `flushConversations()` is called on `agent-complete` — don't replace it with `saveConversations()` (which is debounced 300ms and risks losing data if the process crashes immediately after).
 - **OpenAI image stripping**: if you add a new vision model, update `modelSupportsVision` regex in `api-client.js`, otherwise users with that model will hit the same 400 cycle that broke DeepSeek before.
+- **File tree not loading**: `loadFileTree()` must be called after every code path that sets `state.workDir`. The three paths are `init()` (startup), settings panel "select" button, and `/workdir` command. Missing this call means the sidebar file tree stays empty even though the path is persisted in config.

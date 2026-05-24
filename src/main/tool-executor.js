@@ -711,6 +711,615 @@ async function installSkill(input, ctx) {
   }
 }
 
+// ==================== MCP 安装（完整版）====================
+// 支持自动安装依赖、传输类型检测、GitHub URL 解析、HTTP 端点探测
+
+// 简易命令执行（用于 npm/pip 安装）
+function execInstallCmd(cmd, cwd) {
+  return new Promise((resolve) => {
+    const cp = require('child_process');
+    const proc = cp.exec(cmd, {
+      cwd: cwd || process.cwd(),
+      timeout: 120000,
+      windowsHide: true,
+      env: { ...process.env },
+    }, (err, stdout, stderr) => {
+      if (err) {
+        resolve({ error: err.message, stdout: stdout || '', stderr: stderr || '' });
+      } else {
+        resolve({ stdout: stdout || '', stderr: stderr || '' });
+      }
+    });
+  });
+}
+
+// 探测 HTTP URL 是否为 MCP 端点
+async function probeHttpEndpoint(url) {
+  let getResponse;
+  try {
+    getResponse = await fetch(url, {
+      headers: { 'Accept': 'application/json, text/event-stream' },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch { getResponse = null; }
+
+  if (getResponse && getResponse.ok) {
+    const ct = getResponse.headers.get('content-type') || '';
+    if (ct.includes('text/event-stream') || ct.includes('json')) {
+      return { isMcp: true, mode: 'streamable-http' };
+    }
+  }
+
+  // POST 握手检测
+  try {
+    const postResp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'cc-wrap', version: '1.0.0' } }
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await postResp.json();
+    if (data && data.result && data.result.protocolVersion) {
+      return { isMcp: true, mode: 'post-only' };
+    }
+  } catch {}
+
+  // 尝试 JSON-RPC tools/list
+  try {
+    const postResp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await postResp.json();
+    if (data && data.result && Array.isArray(data.result.tools)) {
+      return { isMcp: true, mode: 'post-only', toolCount: data.result.tools.length };
+    }
+  } catch {}
+
+  return { isMcp: false };
+}
+
+// 解析 GitHub repo → 获取 MCP 配置
+async function resolveGithubRepo(repo, userArgs) {
+  const parts = repo.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').split('/');
+  const owner = parts[0], pkg = parts[1];
+  if (!owner || !pkg) return { error: `GitHub 仓库格式无效: "${repo}"，应为 "owner/repo"` };
+
+  const log = [];
+
+  // 优先查找 mcp.json / mcpServers 配置
+  const configUrls = [
+    `https://raw.githubusercontent.com/${owner}/${pkg}/main/mcp.json`,
+    `https://raw.githubusercontent.com/${owner}/${pkg}/master/mcp.json`,
+    `https://raw.githubusercontent.com/${owner}/${pkg}/main/.mcp.json`,
+    `https://raw.githubusercontent.com/${owner}/${pkg}/master/.mcp.json`,
+  ];
+  for (const url of configUrls) {
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (resp.ok) {
+        const config = await resp.json();
+        const servers = config.mcpServers || config.servers || config;
+        const keys = Object.keys(servers);
+        if (keys.length > 0) {
+          const first = servers[keys[0]];
+          log.push(`从 ${url} 解析到 MCP 配置`);
+          return {
+            command: first.command || first.url || '',
+            args: first.args || [],
+            env: first.env || {},
+            cwd: first.cwd || '',
+            _log: log,
+          };
+        }
+      }
+    } catch {}
+  }
+
+  // 获取 README 分析安装方式
+  const readmeUrls = [
+    `https://raw.githubusercontent.com/${owner}/${pkg}/main/README.md`,
+    `https://raw.githubusercontent.com/${owner}/${pkg}/master/README.md`,
+  ];
+  let readme = null;
+  for (const url of readmeUrls) {
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (resp.ok) { readme = await resp.text(); log.push('已获取 README'); break; }
+    } catch {}
+  }
+
+  if (readme) {
+    // 查找 JSON 代码块中的 mcpServers 定义
+    const blocks = readme.match(/```(?:json)?\s*(\{[\s\S]*?\})[\s\S]*?```/g);
+    if (blocks) {
+      for (const block of blocks) {
+        try {
+          const jsonStr = block.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(jsonStr);
+          const servers = parsed.mcpServers || parsed.servers;
+          if (servers && typeof servers === 'object') {
+            const keys = Object.keys(servers);
+            if (keys.length > 0) {
+              const first = servers[keys[0]];
+              if (first.command || first.url) {
+                log.push('从 README JSON 块解析到 MCP 配置');
+                return {
+                  command: first.command || first.url,
+                  args: first.args || [],
+                  env: first.env || {},
+                  cwd: first.cwd || '',
+                  _log: log,
+                };
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+
+    // 查找 npm 安装指令
+    const npmMatch = readme.match(/npm\s+(?:install|i|add)\s+(-g\s+)?(['"]?)([@\w\-./]+)\2/i);
+    if (npmMatch) {
+      const pkgName = npmMatch[3];
+      log.push(`从 README 检测到 npm 包: ${pkgName}`);
+      const installResult = await execInstallCmd(`npm install -g ${pkgName}`, null);
+      if (!installResult.error) {
+        log.push(`npm install -g ${pkgName} 成功`);
+        return {
+          command: 'npx',
+          args: ['-y', pkgName, ...(userArgs || [])],
+          _autoInstalled: true,
+          _log: log,
+        };
+      }
+      log.push(`npm install -g ${pkgName} 失败: ${installResult.error}`);
+    }
+
+    // 查找 pip 安装指令
+    const pipMatch = readme.match(/pip\s+(?:install)\s+([\w\-.\[\]]+)/i);
+    if (pipMatch) {
+      const pkgName = pipMatch[1];
+      log.push(`从 README 检测到 pip 包: ${pkgName}`);
+      const installResult = await execInstallCmd(`pip install ${pkgName}`, null);
+      if (!installResult.error) {
+        log.push(`pip install ${pkgName} 成功`);
+        return {
+          command: 'python',
+          args: ['-m', pkgName.replace(/-/g, '_'), ...(userArgs || [])],
+          _autoInstalled: true,
+          _log: log,
+        };
+      }
+      log.push(`pip install ${pkgName} 失败: ${installResult.error}`);
+    }
+
+    // 查找 uvx 命令
+    if (readme.includes('uvx ') || readme.includes('npx ')) {
+      const uvxMatch = readme.match(/uvx\s+([\w\-./@]+)/);
+      if (uvxMatch) {
+        log.push('从 README 检测到 uvx 命令');
+        return {
+          command: 'uvx',
+          args: [uvxMatch[1], ...(userArgs || [])],
+          _log: log,
+        };
+      }
+    }
+  }
+
+  // 最后兜底：尝试作为 npm 包安装
+  const npmName = pkg.startsWith('server-') ? `@${owner}/${pkg}` : pkg;
+  log.push(`尝试作为 npm 包安装: ${npmName}`);
+  const installResult = await execInstallCmd(`npm install -g ${npmName} 2>&1`, null);
+  if (!installResult.error) {
+    log.push(`npm install -g ${npmName} 成功`);
+    return {
+      command: 'npx',
+      args: ['-y', npmName, ...(userArgs || [])],
+      _autoInstalled: true,
+      _log: log,
+    };
+  }
+  log.push(`npm install -g ${npmName} 失败: ${installResult.error}`);
+
+  return { error: `无法自动解析 ${repo} 的 MCP 配置。\n已尝试:\n` + log.map(l => '  • ' + l).join('\n') + '\n\n请手动提供 command/args 参数。', _log: log };
+}
+
+// 根据名称尝试 npm/pip 自动安装
+async function tryAutoInstallPackage(name) {
+  // scoped 包 (@scope/name) → npm
+  if (name.startsWith('@')) {
+    const r = await execInstallCmd(`npm install -g ${name} 2>&1`, null);
+    if (!r.error) return { type: 'npm', stdout: r.stdout };
+    return null;
+  }
+
+  // 包含 server- 前缀 → npm
+  if (name.includes('server-') || name.includes('mcp-')) {
+    const r = await execInstallCmd(`npm install -g ${name} 2>&1`, null);
+    if (!r.error) return { type: 'npm', stdout: r.stdout };
+    return null;
+  }
+
+  return null;
+}
+
+// 传输类型解析
+async function resolveMcpConfig(opts) {
+  const { name, command, args: inputArgs, env, cwd: inputCwd, transport } = opts;
+  let t = transport || 'auto';
+  const log = [];
+
+  // auto 模式：根据 command 格式推断
+  if (t === 'auto') {
+    if (command.startsWith('http://') || command.startsWith('https://')) {
+      // HTTP URL → 探测是否是 MCP 端点
+      log.push('检测到 HTTP URL，探测 MCP 端点...');
+      const probe = await probeHttpEndpoint(command);
+      if (probe.isMcp) {
+        log.push(`确认 MCP HTTP 端点 (${probe.mode} 模式)`);
+        return { command, args: [], env, cwd: inputCwd, _isHttp: true, _log: log };
+      }
+      log.push('非 MCP HTTP 端点，适配为 HTTP/SSE 模式');
+      return { command, args: [], env, cwd: inputCwd, _isHttp: true, _log: log };
+    }
+
+    if (/^[\w.-]+\/[\w.-]+$/.test(command) && !command.includes('\\')) {
+      // GitHub user/repo 格式
+      log.push(`检测到 GitHub 仓库格式: ${command}`);
+      const ghResult = await resolveGithubRepo(command, inputArgs);
+      return { ...ghResult, env: { ...(ghResult.env || {}), ...env }, _log: [...log, ...(ghResult._log || [])] };
+    }
+
+    // 以 @ 开头 → npm scoped 包
+    if (command.startsWith('@')) {
+      log.push(`检测到 npm scoped 包: ${command}`);
+      const installResult = await execInstallCmd(`npm install -g ${command} 2>&1`, null);
+      if (!installResult.error) {
+        log.push(`npm install -g ${command} 成功`);
+        return { command: 'npx', args: ['-y', command, ...(inputArgs || [])], env, cwd: inputCwd, _autoInstalled: true, _log: log };
+      }
+      log.push(`npm install 失败: ${installResult.error}`);
+      return { command: 'npx', args: ['-y', command, ...(inputArgs || [])], env, cwd: inputCwd, _log: log };
+    }
+
+    // 其他 → stdio
+    log.push('使用 stdio 模式');
+    return { command, args: inputArgs || [], env, cwd: inputCwd, _log: log };
+  }
+
+  // 显式 transport
+  switch (t) {
+    case 'http': {
+      log.push('HTTP/SSE 模式');
+      const probe = await probeHttpEndpoint(command);
+      if (probe.isMcp) log.push(`端点确认 (${probe.mode})`);
+      return { command, args: [], env, cwd: inputCwd, _isHttp: true, _log: log };
+    }
+    case 'npm': {
+      log.push(`npm 模式: 安装 ${command}`);
+      const r = await execInstallCmd(`npm install -g ${command} 2>&1`, null);
+      if (r.error) return { error: `npm install -g ${command} 失败: ${r.error}`, _log: [...log, `失败: ${r.error}`] };
+      log.push('安装成功');
+      return { command: 'npx', args: ['-y', command, ...(inputArgs || [])], env, cwd: inputCwd, _autoInstalled: true, _log: log };
+    }
+    case 'pip': {
+      log.push(`pip 模式: 安装 ${command}`);
+      const r = await execInstallCmd(`pip install ${command} 2>&1`, null);
+      if (r.error) return { error: `pip install ${command} 失败: ${r.error}`, _log: [...log, `失败: ${r.error}`] };
+      log.push('安装成功');
+      return { command: 'python', args: ['-m', command.replace(/-/g, '_'), ...(inputArgs || [])], env, cwd: inputCwd, _autoInstalled: true, _log: log };
+    }
+    case 'uvx': {
+      log.push('uvx 模式');
+      return { command: 'uvx', args: [command, ...(inputArgs || [])], env, cwd: inputCwd, _log: log };
+    }
+    case 'stdio':
+    default: {
+      log.push('stdio 模式');
+      return { command, args: inputArgs || [], env, cwd: inputCwd, _log: log };
+    }
+  }
+}
+
+async function installMcp(input, ctx) {
+  const { name, command, args = [], env = {}, cwd = '', description = '', transport = 'auto' } = input || {};
+  if (!name) return { error: 'name is required' };
+  if (!command) return { error: 'command is required' };
+
+  // 校验 name 合法（防路径穿越）
+  if (!/^[a-zA-Z0-9][\w.-]{0,63}$/.test(name)) {
+    return { error: 'name 不合法，只允许 [a-zA-Z0-9_.-]，长度 1-64' };
+  }
+
+  try {
+    const { app } = require('electron');
+    const userData = app.getPath('userData');
+    const mcpPath = path.join(userData, 'mcp-servers.json');
+    const fullLog = [];
+
+    // 读取现有配置
+    let mcpData = { servers: [] };
+    try {
+      const raw = fs.readFileSync(mcpPath, 'utf-8');
+      mcpData = JSON.parse(raw);
+      if (!Array.isArray(mcpData.servers)) mcpData.servers = [];
+    } catch { /* 文件不存在 */ }
+
+    // 检查重名
+    if (mcpData.servers.some(s => s.name === name)) {
+      return { error: `MCP 服务器 "${name}" 已存在。如要覆盖，请先在 Settings > MCP 中删除。` };
+    }
+
+    fullLog.push(`[1/4] 解析传输类型...`);
+    const resolved = await resolveMcpConfig({ name, command, args, env, cwd, transport });
+    if (resolved.error) {
+      return { error: resolved.error };
+    }
+
+    if (resolved._log) fullLog.push(...resolved._log);
+
+    // 拼装标准配置（与 Settings 面板格式一致）
+    const serverConfig = {
+      name,
+      command: resolved.command,
+      args: resolved.args || [],
+      cwd: resolved.cwd || '',
+      env: resolved.env && Object.keys(resolved.env).length > 0 ? resolved.env : {},
+    };
+    if (description) serverConfig.description = description;
+
+    fullLog.push(`[2/4] 写入配置...`);
+    mcpData.servers.push(serverConfig);
+    fs.mkdirSync(userData, { recursive: true });
+    fs.writeFileSync(mcpPath, JSON.stringify(mcpData, null, 2));
+
+    fullLog.push(`[3/4] 连接 MCP 服务器...`);
+    const mcpModule = require('./mcp-client');
+    const results = await mcpModule.connectAllServers([serverConfig]);
+    const result = results[0];
+
+    // 广播状态到所有窗口
+    fullLog.push(`[4/4] 通知 UI...`);
+    try {
+      const { BrowserWindow } = require('electron');
+      const wins = BrowserWindow.getAllWindows();
+      wins.forEach(w => {
+        if (w && !w.isDestroyed()) {
+          try { w.webContents.send('mcp-status', mcpModule.getServerStatuses()); } catch (_) {}
+        }
+      });
+    } catch (_) {}
+
+    // 构建结果消息
+    const steps = resolved._autoInstalled ? '已自动安装依赖并' : '';
+    let detailLines = [];
+    detailLines.push(`配置路径: ${mcpPath}`);
+
+    if (result && result.status === 'connected') {
+      detailLines.push(`状态: 已连接`);
+      detailLines.push(`工具: ${result.tools.join(', ')}`);
+      if (resolved._autoInstalled) detailLines.push(`(依赖已自动安装)`);
+      return {
+        content: [
+          `MCP 服务器 "${name}" ${steps}配置成功。`,
+          ``,
+          ...detailLines,
+          ``,
+          `安装过程:`,
+          ...fullLog.map(l => '  ' + l),
+          ``,
+          `你可以在对话中直接使用以上 MCP 工具。`,
+        ].join('\n')
+      };
+    } else {
+      detailLines.push(`状态: 连接失败`);
+      detailLines.push(`错误: ${(result && result.error) || '未知错误'}`);
+      return {
+        content: [
+          `MCP 服务器 "${name}" 已写入配置，但连接失败。`,
+          ``,
+          ...detailLines,
+          ``,
+          `安装过程:`,
+          ...fullLog.map(l => '  ' + l),
+          ``,
+          `可能的原因:`,
+          `  • 检查 ${command} 是否正确安装`,
+          `  • 检查环境变量是否配置正确`,
+          `  • 检查网络连接`,
+          `  • 在 Settings > MCP 中测试连接`,
+        ].join('\n'),
+        error: `连接失败: ${(result && result.error) || '未知错误'}`
+      };
+    }
+  } catch (err) {
+    return { error: '安装 MCP 失败: ' + err.message };
+  }
+}
+
+// ==================== MCP 发现 ====================
+
+async function discoverMcp(input, ctx) {
+  const { source = 'all' } = input || {};
+  const results = [];
+
+  // 1. 扫描 cc-wrap 自身配置
+  if (source === 'all' || source === 'cc-wrap') {
+    try {
+      const { app } = require('electron');
+      const mcpPath = path.join(app.getPath('userData'), 'mcp-servers.json');
+      const raw = fs.readFileSync(mcpPath, 'utf-8');
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.servers) && data.servers.length > 0) {
+        results.push({
+          source: 'cc-wrap',
+          path: mcpPath,
+          servers: data.servers.map(s => ({
+            name: s.name,
+            command: s.command + (s.args && s.args.length > 0 ? ' ' + s.args.join(' ') : ''),
+            type: typeof s.command === 'string' && (s.command.startsWith('http://') || s.command.startsWith('https://')) ? 'http' : 'stdio',
+          })),
+          count: data.servers.length,
+        });
+      } else {
+        results.push({ source: 'cc-wrap', found: false, note: '没有已配置的 MCP 服务器' });
+      }
+    } catch { results.push({ source: 'cc-wrap', found: false, note: '配置文件不存在' }); }
+  }
+
+  // 2. 扫描 Claude Desktop 配置
+  if (source === 'all' || source === 'claude-desktop') {
+    try {
+      const claudePath = path.join(process.env.APPDATA || '', 'Claude', 'claude_desktop_config.json');
+      if (fs.existsSync(claudePath)) {
+        const raw = fs.readFileSync(claudePath, 'utf-8');
+        const data = JSON.parse(raw);
+        if (data.mcpServers && typeof data.mcpServers === 'object') {
+          const servers = Object.entries(data.mcpServers).map(([name, cfg]) => ({
+            name,
+            command: cfg.command + (cfg.args && cfg.args.length > 0 ? ' ' + cfg.args.join(' ') : ''),
+            env: cfg.env ? Object.keys(cfg.env) : [],
+            type: 'stdio',
+          }));
+          results.push({
+            source: 'claude-desktop',
+            path: claudePath,
+            servers,
+            count: servers.length,
+          });
+        } else {
+          results.push({ source: 'claude-desktop', path: claudePath, found: false, note: '未配置 MCP 服务器' });
+        }
+      } else {
+        results.push({ source: 'claude-desktop', found: false, note: 'Claude Desktop 未安装或配置文件不存在' });
+      }
+    } catch (err) {
+      results.push({ source: 'claude-desktop', found: false, note: '读取失败: ' + err.message });
+    }
+  }
+
+  // 3. 扫描 npm 全局包
+  if (source === 'all' || source === 'npm') {
+    try {
+      const { execSync } = require('child_process');
+      const stdout = execSync('npm ls -g --depth=0 --json 2>/dev/null || echo "{}"', { timeout: 15000, windowsHide: true });
+      const data = JSON.parse(stdout.toString());
+      const deps = data.dependencies || {};
+      const mcpPackages = Object.keys(deps).filter(name =>
+        /mcp|server-|modelcontext/i.test(name) && !name.includes('mcporter')
+      );
+      if (mcpPackages.length > 0) {
+        results.push({
+          source: 'npm-global',
+          servers: mcpPackages.map(name => ({
+            name,
+            suggestedCommand: name.startsWith('@') ? `npx -y ${name}` : `npx -y ${name}`,
+            type: 'npm',
+          })),
+          count: mcpPackages.length,
+        });
+      } else {
+        results.push({ source: 'npm-global', found: false, note: '未发现 MCP 相关 npm 全局包' });
+      }
+    } catch (err) {
+      results.push({ source: 'npm-global', found: false, note: '扫描失败: ' + err.message });
+    }
+  }
+
+  // 4. 扫描 pip 包
+  if (source === 'all' || source === 'pip') {
+    try {
+      const { execSync } = require('child_process');
+      const stdout = execSync('pip list --format=json 2>/dev/null || echo "[]"', { timeout: 15000, windowsHide: true });
+      const packages = JSON.parse(stdout.toString());
+      const mcpPackages = packages.filter(p => /mcp|modelcontext/i.test(p.name));
+      if (mcpPackages.length > 0) {
+        results.push({
+          source: 'pip',
+          servers: mcpPackages.map(p => ({
+            name: p.name,
+            version: p.version,
+            suggestedCommand: `python -m ${p.name.replace(/-/g, '_')}`,
+            type: 'pip',
+          })),
+          count: mcpPackages.length,
+        });
+      } else {
+        results.push({ source: 'pip', found: false, note: '未发现 MCP 相关 pip 包' });
+      }
+    } catch (err) {
+      results.push({ source: 'pip', found: false, note: '扫描失败: ' + err.message });
+    }
+  }
+
+  // 5. 扫描 PATH 中已知的 MCP CLIs
+  if (source === 'all' || source === 'path') {
+    try {
+      const knownMCPTools = [
+        { cmd: 'mmx', check: ['--help', 'mcp'] },
+        { cmd: 'uvx', check: ['--help'] },
+        { cmd: 'claude', check: ['mcp', '--help'] },
+      ];
+      const found = [];
+      for (const tool of knownMCPTools) {
+        try {
+          const { execSync } = require('child_process');
+          execSync(`where ${tool.cmd} 2>nul || which ${tool.cmd} 2>/dev/null`, { timeout: 5000 });
+          found.push({ name: tool.cmd, status: 'available', note: tool.cmd + ' 已在 PATH 中' });
+        } catch {
+          // not found
+        }
+      }
+      if (found.length > 0) {
+        results.push({ source: 'path', tools: found, count: found.length });
+      } else {
+        results.push({ source: 'path', found: false, note: '未发现已知 MCP 相关命令行工具' });
+      }
+    } catch (err) {
+      results.push({ source: 'path', found: false, note: '扫描失败: ' + err.message });
+    }
+  }
+
+  // 构建返回
+  const foundItems = results.filter(r => r.servers || (r.tools && r.tools.length > 0));
+  const totalServers = foundItems.reduce((sum, r) => sum + (r.count || 0), 0);
+
+  if (totalServers > 0) {
+    let msg = `发现 ${totalServers} 个 MCP 相关配置：\n\n`;
+    for (const r of results) {
+      if (r.servers && r.servers.length > 0) {
+        msg += `【${r.source}】(${r.path || ''})\n`;
+        for (const s of r.servers) {
+          msg += `  • ${s.name}: ${s.command || s.suggestedCommand}\n`;
+        }
+        msg += '\n';
+      } else if (r.tools && r.tools.length > 0) {
+        msg += `【${r.source}】\n`;
+        for (const t of r.tools) {
+          msg += `  • ${t.name}: ${t.note}\n`;
+        }
+        msg += '\n';
+      }
+    }
+    msg += '使用 InstallMcp 可导入这些服务器。';
+    return { content: msg, _discovered: results };
+  }
+
+  // 什么都没发现
+  let summary = '未在系统中发现额外的 MCP 服务器配置。\n\n扫描来源:\n';
+  for (const r of results) {
+    summary += `  • ${r.source}: ${r.note || 'OK'}\n`;
+  }
+  return { content: summary, _discovered: results };
+}
+
 // ==================== 向用户提问 ====================
 
 function askUserQuestion(input, ctx) {
@@ -930,6 +1539,8 @@ const TOOL_HANDLERS = {
   TaskCreate: taskCreate,
   TaskUpdate: taskUpdate,
   InstallSkill: installSkill,
+  InstallMcp: installMcp,
+  DiscoverMcp: discoverMcp,
   AskUserQuestion: askUserQuestion,
 };
 

@@ -165,6 +165,34 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'InstallMcp',
+    description: 'Install, auto-configure, and connect an MCP server into cc-wrap. Supports npm/pip/uvx/stdio/HTTP all in one tool — auto-installs packages, auto-detects transport type, writes to mcp-servers.json, connects immediately, and verifies tools are available. Use this whenever the user asks to add an MCP server from any source: npm package, pip package, GitHub URL, HTTP/SSE endpoint, or direct executable.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Unique server name (kebab-case, e.g. "my-mcp-server"). Short but descriptive.' },
+        command: { type: 'string', description: 'npm package name (e.g. "@modelcontextprotocol/server-filesystem"), pip package, GitHub repo "user/repo", HTTP/SSE URL, or executable path. For npm/pip, the package is auto-installed if not already present.' },
+        args: { type: 'array', items: { type: 'string' }, description: 'CLI arguments passed to the server after the command. For npm servers these become npx args, for pip servers they become python -m args.' },
+        env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Environment variables the server needs (API keys, tokens, etc.). Set these here rather than in .env files so they are stored in mcp-servers.json.' },
+        cwd: { type: 'string', description: 'Working directory for the server process. Defaults to the project root.' },
+        description: { type: 'string', description: 'Human-readable label shown in the MCP settings panel. If omitted, the server name is used.' },
+        transport: { type: 'string', enum: ['auto', 'stdio', 'http', 'npm', 'pip', 'uvx'], description: 'Installation/transport method. "auto" (default) detects from command: GitHub repo → fetch for mcpServers config; HTTP/HTTPS URL → test as SSE endpoint; else → stdio. "npm"/"pip"/"uvx" explicitly install the package first. "stdio" uses the command as-is. "http" forces HTTP/SSE mode.' }
+      },
+      required: ['name', 'command']
+    }
+  },
+  {
+    name: 'DiscoverMcp',
+    description: 'Scan the local system for existing MCP server configurations from various sources: Claude Desktop config, globally installed npm/pip packages that are MCP servers, cc-wrap own config, and PATH tools with MCP subcommands. Returns a structured report of what was found and where, so the AI can offer to import them via InstallMcp.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', enum: ['all', 'claude-desktop', 'npm', 'pip', 'cc-wrap', 'path'], description: 'Which source to scan. "all" (default) scans everything.' }
+      },
+      required: []
+    }
+  },
+  {
     name: 'AskUserQuestion',
     description: 'Ask the user a multiple-choice question and wait for their answer. Use this at decision points where you need user input to proceed: clarifying ambiguous requirements, choosing between implementation approaches, confirming a non-trivial direction before coding, picking among configuration options. The UI renders the question inline in chat with clickable option buttons plus an "Other..." free-text fallback. The tool blocks until the user answers, then returns their selection as the tool_result text. Do NOT use for: yes/no confirmations of risky actions (those are handled by the permission modal), one-off questions where a plain text reply is enough, questions during long autonomous runs where blocking is bad UX.',
     input_schema: {
