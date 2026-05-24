@@ -1525,7 +1525,7 @@ function renderToolCallHTML(tc) {
   var resultPreview = '';
   if (tc.result && tc.status !== 'error') {
     var raw = String(tc.result).replace(/\s+/g, ' ').trim();
-    if (raw.length > 0) resultPreview = ' · ' + raw.slice(0, 60) + (raw.length > 60 ? '…' : '');
+    if (raw.length > 0) resultPreview = ' · ' + raw.slice(0, 40) + (raw.length > 40 ? '…' : '');
   }
   // 子 Agent 事件渲染
   var subHTML = '';
@@ -1573,14 +1573,28 @@ function appendToolCallIncremental(tc) {
   var assistants = messagesEl.querySelectorAll('.message.assistant');
   if (assistants.length === 0) return false;
   var lastMsg = assistants[assistants.length - 1];
-  var container = lastMsg.querySelector('.tool-calls');
-  if (!container) {
-    container = document.createElement('div');
-    container.className = 'tool-calls';
-    // 插到 .msg-actions 前面
+  // 查找或创建 tool-calls-group 包装器
+  var group = lastMsg.querySelector('.tool-calls-group');
+  if (!group) {
+    group = document.createElement('div');
+    group.className = 'tool-calls-group';
+    group.innerHTML = '<div class="tool-calls-bar">' +
+      '<span class="tool-calls-bar-label">🛠 1 个工具调用</span>' +
+      '<span class="tool-calls-bar-toggle">▶</span>' +
+    '</div>' +
+    '<div class="tool-calls" style="display:none"></div>';
+    var bar = group.querySelector('.tool-calls-bar');
+    bar.onclick = function() { toggleToolCalls(this); };
     var actions = lastMsg.querySelector('.msg-actions');
-    if (actions) lastMsg.insertBefore(container, actions);
-    else lastMsg.appendChild(container);
+    if (actions) lastMsg.insertBefore(group, actions);
+    else lastMsg.appendChild(group);
+  }
+  var container = group.querySelector('.tool-calls');
+  // 更新计数
+  var label = group.querySelector('.tool-calls-bar-label');
+  if (label) {
+    var count = container ? container.children.length + 1 : 1;
+    label.textContent = '🛠 ' + count + ' 个工具调用';
   }
   var wrapper = document.createElement('div');
   wrapper.innerHTML = renderToolCallHTML(tc);
@@ -1608,7 +1622,7 @@ function updateToolCallIncremental(id, tc) {
   if (previewEl) {
     if (tc.result && tc.status !== 'error') {
       var raw = String(tc.result).replace(/\s+/g, ' ').trim();
-      previewEl.textContent = raw ? ' · ' + raw.slice(0, 60) + (raw.length > 60 ? '…' : '') : '';
+      previewEl.textContent = raw ? ' · ' + raw.slice(0, 40) + (raw.length > 40 ? '…' : '') : '';
     } else {
       previewEl.textContent = '';
     }
@@ -1834,12 +1848,17 @@ function renderMessages() {
     }
     var toolHTML = '';
     if (msg.toolCalls && msg.toolCalls.length > 0) {
-      toolHTML = '<div class="tool-calls">';
+      var innerTools = '';
       for (var j = 0; j < msg.toolCalls.length; j++) {
-        var tc = msg.toolCalls[j];
-        toolHTML += renderToolCallHTML(tc);
+        innerTools += renderToolCallHTML(msg.toolCalls[j]);
       }
-      toolHTML += '</div>';
+      toolHTML = '<div class="tool-calls-group">' +
+        '<div class="tool-calls-bar">' +
+          '<span class="tool-calls-bar-label">🛠 ' + msg.toolCalls.length + ' 个工具调用</span>' +
+          '<span class="tool-calls-bar-toggle">▶</span>' +
+        '</div>' +
+        '<div class="tool-calls" style="display:none">' + innerTools + '</div>' +
+      '</div>';
     }
     html += '<div class="message ' + msg.role + (msg.isError ? ' message-error' : '') + '">' +
       '<div class="msg-header"><div class="msg-avatar">' + (isUser ? '你' : 'C') + '</div><span class="msg-role">' + (isUser ? '你' : 'Claude') + '</span><span class="msg-time">' + time + '</span>' +
@@ -1878,11 +1897,26 @@ function renderMessages() {
       saveConversations(); renderMessages(); generateResponse();
     };
   });
+  messagesEl.querySelectorAll('.tool-calls-bar').forEach(function(bar) {
+    bar.onclick = function() { toggleToolCalls(this); };
+  });
   // 延迟滚动，等 DOM 渲染完成
   requestAnimationFrame(function() {
     var chatArea = $('chatArea');
     if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
   });
+}
+
+// 工具调用组折叠切换
+function toggleToolCalls(el) {
+  var group = el.closest('.tool-calls-group');
+  if (!group) return;
+  var calls = group.querySelector('.tool-calls');
+  var toggle = group.querySelector('.tool-calls-bar-toggle');
+  if (!calls) return;
+  var isHidden = calls.style.display === 'none';
+  calls.style.display = isHidden ? 'block' : 'none';
+  if (toggle) toggle.textContent = isHidden ? '▼' : '▶';
 }
 
 // 轻量级 Toast 通知
@@ -3675,7 +3709,7 @@ function setupScrollToBottom() {
   if (!chatArea || !btn) return;
   function updateBtn() {
     var dist = chatArea.scrollHeight - chatArea.scrollTop - chatArea.clientHeight;
-    btn.style.display = dist > 200 ? 'flex' : 'none';
+    btn.style.display = dist > 200 ? 'inline-flex' : 'none';
   }
   chatArea.addEventListener('scroll', updateBtn, { passive: true });
   btn.onclick = function() {
