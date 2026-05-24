@@ -1704,29 +1704,27 @@ function initTerminal() {
     term.open(container);
     fitAddon.fit();
 
-    // Ctrl+Shift+C/V 复制粘贴
+    // Ctrl+Shift+C 复制选中文本
     term.attachCustomKeyEventHandler(function(e) {
-      if (e.ctrlKey && e.shiftKey && e.type === 'keydown') {
-        if (e.code === 'KeyC') {
-          var sel = term.getSelection();
-          if (sel) {
-            window.api.clipboard.writeText(sel);
-            term.focus();
-          }
-          return false;
+      if (e.type === 'keydown' && e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
+        var sel = term.getSelection();
+        if (sel) {
+          window.api.clipboard.writeText(sel);
         }
-        if (e.code === 'KeyV') {
-          try {
-            var text = window.api.clipboard.readText();
-            if (text && state.terminalId) {
-              window.api.invoke('terminal-write', { terminalId: state.terminalId, data: text });
-            }
-          } catch (_) {}
-          return false;
-        }
+        return false;
       }
       return true;
     });
+
+    // 捕获 paste 事件（在 xterm 内部处理之前截获）
+    container.addEventListener('paste', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var text = e.clipboardData.getData('text/plain');
+      if (text && state.terminalId) {
+        window.api.invoke('terminal-write', { terminalId: state.terminalId, data: text });
+      }
+    }, true);
 
     // 右键粘贴
     container.addEventListener('contextmenu', function(e) {
