@@ -242,6 +242,7 @@ async function init() {
 
   state.workDir = state.config.workDirectory || '';
   state.theme = state.config.theme || 'dark';
+  if (state.workDir) loadFileTree();
 
   // 加载记忆
   try {
@@ -2605,6 +2606,7 @@ function handleSlashCommand(cmd) {
       if (args) {
         state.workDir = args;
         window.api.invoke('set-work-dir', args);
+        loadFileTree();
         addAssistantMsg('工作目录已设置: ' + args);
       } else {
         addAssistantMsg('当前工作目录: ' + (state.workDir || '未设置'));
@@ -4048,7 +4050,7 @@ function renderSettingsTab(tab) {
     if (selectBtn) {
       selectBtn.onclick = async function() {
         var dir = await window.api.invoke('select-folder');
-        if (dir) { state.workDir = dir; $('cfgWorkDir').value = dir; }
+        if (dir) { state.workDir = dir; $('cfgWorkDir').value = dir; loadFileTree(); }
       };
     }
     content.querySelectorAll('.tool-check').forEach(function(cb) {
