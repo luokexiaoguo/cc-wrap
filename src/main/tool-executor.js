@@ -970,7 +970,7 @@ async function resolveMcpConfig(opts) {
       return { command, args: [], env, cwd: inputCwd, _isHttp: true, _log: log };
     }
 
-    if (/^[\w.-]+\/[\w.-]+$/.test(command) && !command.includes('\\')) {
+    if (/^[a-zA-Z0-9][\w.-]*\/[\w.-]+$/.test(command) && !command.includes('\\')) {
       // GitHub user/repo 格式
       log.push(`检测到 GitHub 仓库格式: ${command}`);
       const ghResult = await resolveGithubRepo(command, inputArgs);
