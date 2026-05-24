@@ -77,7 +77,8 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   clipboard: {
-    writeText: (text) => clipboard.writeText(text)
+    writeText: (text) => clipboard.writeText(text),
+    readText: () => clipboard.readText()
   },
 
   // highlight.js 暴露：仅暴露受限 API，不直接传引用避免 contextBridge 序列化问题

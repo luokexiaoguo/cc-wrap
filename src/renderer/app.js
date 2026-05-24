@@ -1704,6 +1704,41 @@ function initTerminal() {
     term.open(container);
     fitAddon.fit();
 
+    // Ctrl+Shift+C/V 复制粘贴
+    term.attachCustomKeyEventHandler(function(e) {
+      if (e.ctrlKey && e.shiftKey && e.type === 'keydown') {
+        if (e.code === 'KeyC') {
+          var sel = term.getSelection();
+          if (sel) {
+            window.api.clipboard.writeText(sel);
+            term.focus();
+          }
+          return false;
+        }
+        if (e.code === 'KeyV') {
+          try {
+            var text = window.api.clipboard.readText();
+            if (text && state.terminalId) {
+              window.api.invoke('terminal-write', { terminalId: state.terminalId, data: text });
+            }
+          } catch (_) {}
+          return false;
+        }
+      }
+      return true;
+    });
+
+    // 右键粘贴
+    container.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      try {
+        var text = window.api.clipboard.readText();
+        if (text && state.terminalId) {
+          window.api.invoke('terminal-write', { terminalId: state.terminalId, data: text });
+        }
+      } catch (_) {}
+    });
+
     term.onData(function(data) {
       if (state.terminalId) {
         window.api.invoke('terminal-write', { terminalId: state.terminalId, data: data });
