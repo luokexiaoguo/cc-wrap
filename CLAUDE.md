@@ -65,9 +65,13 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 
 ### Tool system (`src/main/tools.js` + `tool-executor.js`)
 
-14 built-in tools defined in `tools.js` with Anthropic-format `input_schema`: Read, Write, Edit, Glob, Grep, Bash, ListDirectory, WebSearch, WebFetch, Agent, TaskCreate, TaskUpdate, InstallSkill, AskUserQuestion.
+16 built-in tools defined in `tools.js` with Anthropic-format `input_schema`: Read, Write, Edit, Glob, Grep, Bash, ListDirectory, WebSearch, WebFetch, Agent, TaskCreate, TaskUpdate, InstallSkill, InstallMcp, DiscoverMcp, AskUserQuestion.
 
 `tools.js` exports pure data + helpers (`getEnabledTools`, `mergeTools`, `getOpenAITools`). `tool-executor.js` contains the implementations, dispatched via `TOOL_HANDLERS` map. `executeTool()` checks built-in handlers first, falls back to MCP handlers from `mcp-client.getMcpToolHandler`.
+
+**InstallMcp**: Full MCP server installer. Supports 5 transport modes: `npm` / `pip` / `uvx` / `http` / `stdio`, plus `auto` detection. Auto-detects from command format: HTTP/HTTPS URL → probe endpoint (GET → POST initialize → POST tools/list); GitHub `owner/repo` → fetch `mcp.json` / `.mcp.json` / README config or try npm install; `@scope/package` → auto npm install. For npm/pip/uvx modes, the package is auto-installed before connection. Writes to `mcp-servers.json`, connects via `mcp-client.js`, broadcasts `mcp-status` to all windows. Returns full step log and tool list on success, remediation hints on failure.
+
+**DiscoverMcp**: Scans the local system for existing MCP server configurations. Sources: `claude-desktop` (`%APPDATA%/Claude/claude_desktop_config.json`), `npm` (global npm packages matching MCP patterns), `pip` (Python MCP packages), `cc-wrap` (current `mcp-servers.json`), `path` (known MCP CLIs like `mmx`, `uvx`). Returns structured report with server names, commands, and types — AI can then import via InstallMcp.
 
 **AskUserQuestion** is a special tool that pauses the agent loop to ask the user a multiple-choice question. The handler in `tool-executor.js` sends an `agent-question` IPC to the renderer, then returns a Promise that resolves when the user responds via `agent-question-response` IPC. The renderer (`app.js`) listens for `agent-question`, finds the last running `AskUserQuestion` tool card in the DOM, and injects a `.tool-call-question` div with option buttons + "Other..." text input. On selection, it sends the answer back via `window.api.send('agent-question-response', requestId, answer)`. The handler supports cancellation via `ctx.signal` and a 10-minute timeout. IPC channels: `agent-question` (ON_CHANNELS) + `agent-question-response` (SEND_CHANNELS).
 
@@ -77,7 +81,7 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 
 **Task tools** (`taskCreate` / `taskUpdate`) emit `tasks-changed` IPC to the renderer after each mutation, driving the Plan UI panel. Storage is an in-memory `Map` (`taskStore`), cleared via `clear-tasks` IPC when the user switches conversations.
 
-**InstallSkill** writes SKILL.md to the fixed location `%APPDATA%/cc-wrap/skills/<name>/` (not project-dependent). Supports `files` array parameter for supplementary scripts/configs — each entry `{ path, content }` is written with path-traversal protection. Skills are loaded at startup from two sources: `skills.json` (UI metadata) + disk files in `skills/<name>/SKILL.md` (higher priority, overrides JSON).
+**InstallSkill** writes SKILL.md to the fixed location `%APPDATA%/cc-wrap/skills/<name>/` (not project-dependent). Supports `files` array parameter for supplementary scripts/configs — each entry `{ path, content }` is written with path-traversal protection. Skills are loaded at startup from three sources (priority order): project `skills/<name>/SKILL.md` in the repo root → `%APPDATA%/cc-wrap/skills/<name>/SKILL.md` (disk, higher priority than JSON) → `skills.json` (UI metadata, lowest priority).
 
 ### Logger (`src/main/logger.js`)
 
