@@ -65,7 +65,7 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 
 ### Tool system (`src/main/tools.js` + `tool-executor.js`)
 
-16 built-in tools defined in `tools.js` with Anthropic-format `input_schema`: Read, Write, Edit, Glob, Grep, Bash, ListDirectory, WebSearch, WebFetch, Agent, TaskCreate, TaskUpdate, InstallSkill, InstallMcp, DiscoverMcp, AskUserQuestion.
+17 built-in tools defined in `tools.js` with Anthropic-format `input_schema`: Read, Write, Edit, Glob, Grep, Bash, ListDirectory, WebSearch, WebFetch, Agent, GetAgentResult, TaskCreate, TaskUpdate, InstallSkill, InstallMcp, DiscoverMcp, AskUserQuestion.
 
 `tools.js` exports pure data + helpers (`getEnabledTools`, `mergeTools`, `getOpenAITools`). `tool-executor.js` contains the implementations, dispatched via `TOOL_HANDLERS` map. `executeTool()` checks built-in handlers first, falls back to MCP handlers from `mcp-client.getMcpToolHandler`.
 
@@ -74,6 +74,10 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 **DiscoverMcp**: Scans the local system for existing MCP server configurations. Sources: `claude-desktop` (`%APPDATA%/Claude/claude_desktop_config.json`), `npm` (global npm packages matching MCP patterns), `pip` (Python MCP packages), `cc-wrap` (current `mcp-servers.json`), `path` (known MCP CLIs like `mmx`, `uvx`). Returns structured report with server names, commands, and types — AI can then import via InstallMcp.
 
 **AskUserQuestion** is a special tool that pauses the agent loop to ask the user a multiple-choice question. The handler in `tool-executor.js` sends an `agent-question` IPC to the renderer, then returns a Promise that resolves when the user responds via `agent-question-response` IPC. The renderer (`app.js`) listens for `agent-question`, finds the last running `AskUserQuestion` tool card in the DOM, and injects a `.tool-call-question` div with option buttons + "Other..." text input. On selection, it sends the answer back via `window.api.send('agent-question-response', requestId, answer)`. The handler supports cancellation via `ctx.signal` and a 10-minute timeout. IPC channels: `agent-question` (ON_CHANNELS) + `agent-question-response` (SEND_CHANNELS).
+
+**Agent type system**: `AGENT_TYPES` in `tool-executor.js` defines named agent profiles (`explore`, `plan`, `general-purpose`) with `allowTools` filtering and `systemPromptSuffix`. The `explore` type only allows search/read tools; `plan` is similar but focused on architecture analysis. Sub-agents spawned by the `Agent` tool inherit their type's constraints.
+
+**Background agents**: When `Agent` tool is called with `run_in_background: true`, the sub-agent runs independently without blocking the parent loop. Background agents don't receive `ctx.window` (prevents flash-crash from stale window references). Results are polled via `GetAgentResult` tool which checks `backgroundAgents` Map by taskId.
 
 **Read tool encoding handling** (`readTextSmart` in `tool-executor.js`, mirrored in `main.js` as `readTextWithDetectedEncoding`): detects UTF-8 BOM → UTF-16 LE/BE BOM → strict UTF-8 → GBK (Windows ANSI fallback via `iconv-lite`) → latin1. Edit and Grep tools also use `readTextSmart` (not bare `'utf-8'`).
 
@@ -87,9 +91,15 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 
 Hooks `console.log/error/warn` to write both to terminal and a file. `initLogger()` must be called at module level (before `app.whenReady`); `setLogPath(userDataPath)` is called inside `app.whenReady` since `app.getPath()` isn't available earlier. 5MB log rotation (`app.log` → `app.old.log`). IPC handlers: `get-logs` (search + last N lines), `clear-logs`, `export-logs` (native save dialog).
 
-### Settings: Log viewer & Cache clear
+### Settings tabs
 
-Settings has a "日志" tab (`data-stab="logs"`) with search (300ms debounce), refresh, clear, export buttons, and a `<pre>` viewer. The "通用" tab has a cache-clear section with buttons for pasted-images, conversations, and all-cache. Clearing conversations resets `state.conversations` and re-renders the UI. The "关于" tab shows app version and a GitHub link that opens in the default browser via `open-external` IPC (`shell.openExternal`).
+Settings modal has tabs (`data-stab`): `api`, `theme`, `general`, `logs`, `tokens`, `about`.
+- **api** — global API config, temperature slider (0–2), model add/edit forms with per-model temperature + maxTokens
+- **theme** — dark/light toggle, font size slider
+- **general** — language, work directory, custom system prompt, always-allowed tools, auto-save, cache clear
+- **logs** — search (300ms debounce), refresh, clear, export buttons, `<pre>` viewer
+- **tokens** — GitHub-style contribution heatmap aggregating daily token usage from `conversations.json`
+- **about** — app version, GitHub link via `open-external` IPC
 
 ### MCP client (`src/main/mcp-client.js`)
 
@@ -107,9 +117,9 @@ Composition order (later overrides earlier semantically): base Claude Code ident
 
 ### Renderer architecture (`src/renderer/app.js`)
 
-Single ~4200-line file holding a global `state` object
+Single ~4850-line file holding a global `state` object
 
-**Token statistics**: `agent-complete` IPC carries `usage: { input_tokens, output_tokens }`. The renderer stores these per assistant message (`inputTokens`/`outputTokens`) and recalculates conversation totals (`totalInputTokens`/`totalOutputTokens`) on every completion. Displayed per-message (`↑N · ↓N`) and in conversation sidebar. `/cost` slash command shows full breakdown per-message and across all conversations.
+**Token statistics**: Sidebar per-conversation token display has been removed in favor of a Settings > Token Stats tab with a GitHub-style contribution heatmap. Summary cards show today/yesterday/last 30 days. `/cost` slash command still shows full breakdown per-message and across all conversations.
 
 **Export conversation**: the toolbar "导出" button formats conversation as Markdown and calls `export-conversation` IPC which opens a native save dialog (default directory = workDir).
 
@@ -151,7 +161,7 @@ Bottom panel terminal (VS Code 风格), 通过 `node-pty` + `xterm.js` 实现。
 
 All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 
-- **`config.json`** (electron-store) — defaults seeded in `main.js` Store constructor. Schema includes: `apiKey`, `apiEndpoint`, `defaultModel`, `models[]`, `theme`, `fontSize`, `language`, `maxTokens`, `temperature`, `workDirectory`, `recentProjects[]`, `minimizeToTray`, `chatPaneWidth`, `alwaysAllowedTools[]`, `customSystemPrompt`, `env`, `windowBounds`. API keys in `models[]` are encrypted via electron `safeStorage` with `enc:<base64>` prefix; `readDecryptedConfig(store)` is the single entry point in main process for reading a fully-decrypted snapshot. `env` object is injected into tool-executor via `setEnvConfig()` at startup.
+- **`config.json`** (electron-store) — defaults seeded in `main.js` Store constructor. Schema includes: `apiKey`, `apiEndpoint`, `defaultModel`, `models[]`, `theme`, `fontSize`, `language`, `maxTokens`, `temperature`, `workDirectory`, `recentProjects[]`, `minimizeToTray`, `chatPaneWidth`, `alwaysAllowedTools[]`, `customSystemPrompt`, `env`, `windowBounds`. `models[]` entries also carry per-model `temperature` and `maxTokens`. API keys in `models[]` are encrypted via electron `safeStorage` with `enc:<base64>` prefix; `readDecryptedConfig(store)` is the single entry point in main process for reading a fully-decrypted snapshot. `env` object is injected into tool-executor via `setEnvConfig()` at startup.
 - **`conversations.json`** — chat history (atomic write + 300ms debounce + `beforeunload` flush + `flushConversations()` called immediately on `agent-complete`). Migrated from `localStorage` on first launch. Each message can have `inputTokens`/`outputTokens` fields; each conversation has `totalInputTokens`/`totalOutputTokens`.
 - **`logs/app.log`** — rolling log file from `logger.js` (5MB rotation).
 - **`memory.json`** — user memories (manual + auto-extracted)
