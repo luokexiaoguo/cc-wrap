@@ -2308,7 +2308,7 @@ async function generateResponse() {
     if (modelConfig.endpoint) apiOptions.endpoint = modelConfig.endpoint;
     if (modelConfig.apiKey) apiOptions.apiKey = modelConfig.apiKey;
     if (modelConfig.maxTokens) apiOptions.maxTokens = modelConfig.maxTokens;
-    if (modelConfig.temperature) apiOptions.temperature = modelConfig.temperature;
+    if (modelConfig.temperature != null) apiOptions.temperature = modelConfig.temperature;
     apiOptions.model = modelConfig.id;
   }
 
@@ -4028,7 +4028,7 @@ function renderSettingsTab(tab) {
         var endpoint = $('customModelEndpoint').value.trim();
         var apiKey = $('customModelApiKey').value.trim();
         var modelMaxTokens = parseInt($('customModelMaxTokens').value) || undefined;
-        var modelTemperature = parseFloat($('customModelTemperature').value) || undefined;
+        var modelTemperature = parseFloat($('customModelTemperature').value);
         if (!name || !id) { showToast(t('fillNameId')); return; }
         await window.api.invoke('add-model', { provider: 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: modelMaxTokens, temperature: modelTemperature });
         state.config.models = await window.api.invoke('get-models');
@@ -4261,7 +4261,7 @@ function renderModelList() {
         '<div class="model-card-detail">ID: ' + esc(m.id) + '</div>' +
         '<div class="model-card-detail">' + t('apiEndpoint') + ': ' + esc(m.endpoint || t('endpointDefault')) + '</div>' +
         '<div class="model-card-detail">' + t('apiKeyModel') + ': ' + (m.apiKey ? t('keySet') : '<span style="color:var(--accent-red)">' + t('keyNotSet') + '</span>') + '</div>' +
-        (m.temperature ? '<div class="model-card-detail">Temp: ' + m.temperature + '</div>' : '') +
+        (m.temperature != null ? '<div class="model-card-detail">Temp: ' + m.temperature + '</div>' : '') +
       '</div>' +
       '<div class="model-card-actions">' +
         '<button class="btn-sm" data-edit="' + i + '">' + t('editModel') + '</button>' +
@@ -4337,7 +4337,7 @@ function openEditModelModal(idx) {
     if (!name || !id) { alert(t('fillNameId')); return; }
 
     var editMaxTokens = parseInt($('editModelMaxTokens').value) || undefined;
-    var editTemperature = parseFloat($('editModelTemperature').value) || undefined;
+    var editTemperature = parseFloat($('editModelTemperature').value);
     var models = state.config.models.slice();
     models[idx] = { provider: models[idx].provider || 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: editMaxTokens, temperature: editTemperature };
     await window.api.invoke('set-config', 'models', models);
