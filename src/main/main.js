@@ -559,40 +559,6 @@ app.whenReady().then(() => {
     });
   });
 
-  ipcMain.handle('tool-bash-stream', (event, command, cwd) => {
-    return new Promise((resolve) => {
-      const workDir = cwd || store.get('workDirectory');
-      const proc = spawn(command, [], {
-        cwd: workDir,
-        shell: true,
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-
-      let output = '';
-      let stderr = '';
-
-      proc.stdout.on('data', (data) => {
-        const chunk = data.toString();
-        output += chunk;
-        mainWindow.webContents.send('bash-output', chunk);
-      });
-
-      proc.stderr.on('data', (data) => {
-        const chunk = data.toString();
-        stderr += chunk;
-        mainWindow.webContents.send('bash-output', chunk);
-      });
-
-      proc.on('close', (code) => {
-        resolve({ success: code === 0, output: output || stderr, code });
-      });
-
-      proc.on('error', (err) => {
-        resolve({ success: false, output: err.message });
-      });
-    });
-  });
-
   // ========== Claude Code 工具：文件树 ==========
 
   ipcMain.handle('get-file-tree', async (event, dir) => {

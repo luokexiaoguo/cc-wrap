@@ -8,7 +8,6 @@ const util = require('util');
 
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB 轮转
 let logPath = '';
-let mainWindowRef = null;
 
 // 安装 console hook（必须尽早调用，不依赖 app.whenReady）
 function initLogger() {
@@ -73,8 +72,4 @@ function clearLogs() {
   try { fs.writeFileSync(logPath, '', 'utf-8'); } catch {}
 }
 
-function setMainWindow(win) {
-  mainWindowRef = win;
-}
-
-module.exports = { initLogger, setLogPath, getLogPath, readLastLines, clearLogs, setMainWindow };
+module.exports = { initLogger, setLogPath, getLogPath, readLastLines, clearLogs };

@@ -251,11 +251,6 @@ function getEnabledTools(enabledNames) {
   return TOOL_DEFINITIONS.filter(t => enabledNames.includes(t.name));
 }
 
-// 根据名称获取单个工具定义
-function getToolByName(name) {
-  return TOOL_DEFINITIONS.find(t => t.name === name);
-}
-
 // 合并内置工具和 MCP 工具
 function mergeTools(builtinTools, mcpTools) {
   if (!mcpTools || mcpTools.length === 0) return builtinTools;
@@ -263,4 +258,4 @@ function mergeTools(builtinTools, mcpTools) {
   return [...builtinTools, ...mcpTools];
 }
 
-module.exports = { TOOL_DEFINITIONS, getOpenAITools, getEnabledTools, getToolByName, mergeTools };
+module.exports = { TOOL_DEFINITIONS, getOpenAITools, getEnabledTools, mergeTools };
