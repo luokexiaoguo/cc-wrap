@@ -2169,7 +2169,7 @@ body.light-theme .mcp-status.disconnected { background: rgba(179,70,58,0.12); co
 
 /* ===== Token 统计热力图 ===== */
 .token-summary-row {
-  display: flex; gap: 12px; margin-bottom: 24px;
+  display: flex; gap: 12px; margin-bottom: 16px;
 }
 .token-summary-card {
   flex: 1; background: var(--bg-secondary); border: 1px solid var(--border);
@@ -2179,25 +2179,26 @@ body.light-theme .mcp-status.disconnected { background: rgba(179,70,58,0.12); co
 .tsc-value { font-size: 22px; font-weight: 700; color: var(--text-primary); font-family: var(--font-mono); }
 .tsc-sub { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
 
+.heatmap-section-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary); }
 .heatmap-wrapper { padding: 8px 0; }
-.heatmap-month-row { display: flex; align-items: center; gap: 2px; margin-bottom: 4px; padding-left: 32px; }
+.heatmap-month-row { display: flex; align-items: center; gap: 2px; margin-bottom: 6px; }
 .heatmap-spacer { width: 32px; flex-shrink: 0; }
-.heatmap-month-label { width: 11px; font-size: 8px; color: var(--text-secondary); text-align: center; flex-shrink: 0; overflow: visible; white-space: nowrap; }
-.heatmap-row { display: flex; align-items: center; gap: 2px; margin-bottom: 2px; }
-.heatmap-day-label { width: 32px; font-size: 9px; color: var(--text-secondary); text-align: right; padding-right: 4px; flex-shrink: 0; font-weight: 500; }
+.heatmap-month-label { width: 18px; font-size: 10px; color: var(--text-secondary); text-align: center; flex-shrink: 0; overflow: visible; white-space: nowrap; }
+.heatmap-row { display: flex; align-items: center; gap: 2px; margin-bottom: 3px; }
+.heatmap-day-label { width: 32px; font-size: 11px; color: var(--text-secondary); text-align: right; padding-right: 6px; flex-shrink: 0; font-weight: 500; }
 .heatmap-cell {
-  width: 11px; height: 11px; border-radius: 2px; flex-shrink: 0;
-  cursor: pointer; transition: all 0.15s;
+  width: 18px; height: 18px; border-radius: 3px; flex-shrink: 0;
+  cursor: pointer; transition: all 0.12s;
 }
-.heatmap-cell:hover { transform: scale(1.4); outline: 2px solid var(--text-primary); z-index: 1; position: relative; }
-/* 浅粉 → 深棕 渐变 */
+.heatmap-cell:hover { transform: scale(1.35); outline: 2px solid var(--text-primary); z-index: 1; position: relative; }
+/* 浅 → 深 渐变（用量越大颜色越深） */
 .heatmap-cell.lv0 { background: var(--bg-tertiary); }
-.heatmap-cell.lv1 { background: #3d2325; }
-.heatmap-cell.lv2 { background: #6b3737; }
+.heatmap-cell.lv1 { background: #d97757; }
+.heatmap-cell.lv2 { background: #b86a3a; }
 .heatmap-cell.lv3 { background: #8a4a3a; }
-.heatmap-cell.lv4 { background: #b86a3a; }
-.heatmap-cell.lv5 { background: #d97757; }
+.heatmap-cell.lv4 { background: #6b3737; }
+.heatmap-cell.lv5 { background: #3d2325; }
 .heatmap-legend-row {
   display: flex; align-items: center; gap: 2px;
-  margin-top: 12px; padding-left: 32px;
+  margin-top: 14px;
 }

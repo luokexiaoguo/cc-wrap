@@ -38,7 +38,7 @@ var I18N = {
     exportSuccess: '对话已导出为 Markdown 文件', exportClipboard: '导出失败，已复制到剪贴板',
     autoSave: '自动保存', autoSaveDesc: '编辑文件时自动保存（每 5 秒）',
     tokenStats: 'Token 统计', today: '今天', yesterday: '昨天', last30d: '近 30 天',
-    sessions: '会话数', totalTokens: 'Token 总量',
+    sessions: '会话数', totalTokens: 'Token 总量', less: '少', more: '多',
     about: '关于', appVersion: '版本', appDescription: 'cc-wrap 是一个基于 Electron 的 Claude Code 桌面前端，支持多模型、MCP 工具扩展、Skills 注入、记忆系统等功能。',
     githubRepo: 'GitHub 仓库',
   },
@@ -74,7 +74,7 @@ var I18N = {
     exportSuccess: 'Conversation exported as Markdown', exportClipboard: 'Export failed, copied to clipboard',
     autoSave: 'Auto Save', autoSaveDesc: 'Auto-save edited files (every 5s)',
     tokenStats: 'Token Stats', today: 'Today', yesterday: 'Yesterday', last30d: 'Last 30 Days',
-    sessions: 'Sessions', totalTokens: 'Total Tokens',
+    sessions: 'Sessions', totalTokens: 'Total Tokens', less: 'Less', more: 'More',
     about: 'About', appVersion: 'Version', appDescription: 'cc-wrap is an Electron desktop frontend for Claude Code, supporting multiple models, MCP tools, Skills, and memory system.',
     githubRepo: 'GitHub Repository',
   }
@@ -4238,6 +4238,10 @@ function renderSettingsTab(tab) {
       if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
       return String(n);
     }
+    function toLocalDay(isoStr) {
+      var d = typeof isoStr === 'string' ? new Date(isoStr) : isoStr;
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
     function computeTokenStats() {
       var dayMap = {};
       state.conversations.forEach(function(c) {
@@ -4245,14 +4249,14 @@ function renderSettingsTab(tab) {
         c.messages.forEach(function(m) {
           if (!m.timestamp) return;
           if (!m.inputTokens && !m.outputTokens) return;
-          var day = m.timestamp.slice(0, 10);
+          var day = toLocalDay(m.timestamp);
           if (!dayMap[day]) dayMap[day] = { tokens: 0, convSet: {} };
           dayMap[day].tokens += (m.inputTokens || 0) + (m.outputTokens || 0);
           dayMap[day].convSet[c.id] = true;
           hasMsgData = true;
         });
         if (!hasMsgData && c.createdAt && (c.totalInputTokens || c.totalOutputTokens)) {
-          var day = c.createdAt.slice(0, 10);
+          var day = toLocalDay(c.createdAt);
           if (!dayMap[day]) dayMap[day] = { tokens: 0, convSet: {} };
           dayMap[day].tokens += (c.totalInputTokens || 0) + (c.totalOutputTokens || 0);
           dayMap[day].convSet[c.id] = true;
@@ -4266,11 +4270,11 @@ function renderSettingsTab(tab) {
     }
     var stats = computeTokenStats();
     var today = new Date();
-    var todayStr = today.toISOString().slice(0, 10);
+    var todayStr = toLocalDay(today);
     var yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
-    var yesterdayStr = yesterday.toISOString().slice(0, 10);
+    var yesterdayStr = toLocalDay(yesterday);
     var d30 = new Date(today); d30.setDate(d30.getDate() - 30);
-    var d30Str = d30.toISOString().slice(0, 10);
+    var d30Str = toLocalDay(d30);
     function di(dayStr) {
       var d = stats[dayStr];
       return { tokens: d ? d.tokens : 0, convs: d ? d.convCount : 0 };
@@ -4292,7 +4296,7 @@ function renderSettingsTab(tab) {
     } else {
       var endDate = new Date(today);
       var startDate = new Date(today);
-      startDate.setMonth(startDate.getMonth() - 6);
+      startDate.setMonth(startDate.getMonth() - 7);
       startDate.setDate(startDate.getDate() - startDate.getDay());
       var weeks = [];
       var cursor = new Date(startDate);
@@ -4301,7 +4305,7 @@ function renderSettingsTab(tab) {
         for (var i = 0; i < 7; i++) {
           var d = new Date(cursor);
           d.setDate(d.getDate() + i);
-          var ds = d.toISOString().slice(0, 10);
+          var ds = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
           week.push({ date: d, dayStr: ds, data: stats[ds] || null });
         }
         weeks.push(week);
@@ -4317,7 +4321,7 @@ function renderSettingsTab(tab) {
         var fd = weeks[w][0].date;
         var m = fd.getMonth(), y = fd.getFullYear();
         if (w === 0 || weeks[w-1][0].date.getMonth() !== m) {
-          monthLabels.push(y !== lastYear ? (y + '/' + (m + 1)) : (m + 1));
+          monthLabels.push(y !== lastYear ? (y + '/' + (m + 1)) : String(m + 1));
           lastYear = y;
         } else { monthLabels.push(''); }
       }
@@ -4327,6 +4331,7 @@ function renderSettingsTab(tab) {
         if (r <= 0.1) return 1; if (r <= 0.25) return 2; if (r <= 0.5) return 3; if (r <= 0.75) return 4;
         return 5;
       }
+      html += '<div class="heatmap-section-title">' + t('tokenStats') + '</div>';
       html += '<div class="heatmap-wrapper">';
       html += '<div class="heatmap-month-row"><span class="heatmap-spacer"></span>';
       for (var w = 0; w < weeks.length; w++) {
@@ -4346,10 +4351,11 @@ function renderSettingsTab(tab) {
         html += '</div>';
       }
       html += '<div class="heatmap-legend-row">' +
-        '<span style="font-size:11px;color:var(--text-secondary);margin-right:6px">' + t('totalTokens') + '</span>' +
+        '<span style="font-size:11px;color:var(--text-secondary);margin-right:6px">' + t('less') + '</span>' +
         '<span class="heatmap-cell lv0"></span><span class="heatmap-cell lv1"></span>' +
         '<span class="heatmap-cell lv2"></span><span class="heatmap-cell lv3"></span>' +
-        '<span class="heatmap-cell lv4"></span><span class="heatmap-cell lv5"></span></div>';
+        '<span class="heatmap-cell lv4"></span><span class="heatmap-cell lv5"></span>' +
+        '<span style="font-size:11px;color:var(--text-secondary);margin-left:6px">' + t('more') + '</span></div>';
       html += '</div>';
       content.innerHTML = html;
     }
