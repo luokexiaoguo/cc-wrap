@@ -1588,7 +1588,7 @@ async function agent(input, ctx) {
   if (run_in_background) {
     const taskId = `bg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     // 后台 Agent 不继承父的取消信号，独立生命周期
-    const bgCtx = { workDir: ctx.workDir, window: ctx.window, apiConfig: ctx.apiConfig, toolCallId: ctx.toolCallId };
+    const bgCtx = { workDir: ctx.workDir, apiConfig: ctx.apiConfig, toolCallId: ctx.toolCallId };
     const agentPromise = runSubAgent(input, bgCtx);
 
     backgroundAgents.set(taskId, {

@@ -15,7 +15,7 @@ var I18N = {
     // 设置国际化
     apiConfig: 'API配置', themeSettings: '主题设置', generalSettings: '通用设置',
     globalConfig: '全局配置', apiKeyLabel: '全局 API 密钥（Claude 模型使用）',
-    defaultModel: '默认模型', maxTokens: '最大Token数', saveConfig: '保存全局配置',
+    defaultModel: '默认模型', maxTokens: '最大Token数', temperature: '温度', saveConfig: '保存全局配置',
     addModel: '添加第三方模型', modelName: '模型名称', modelId: '模型ID',
     apiEndpoint: 'API端点', apiKeyModel: 'API密钥', modelPlaceholderKey: '模型专属密钥',
     addModelBtn: '添加模型', addedModels: '已添加的模型', noModels: '暂无第三方模型',
@@ -49,7 +49,7 @@ var I18N = {
     // Settings i18n
     apiConfig: 'API Configuration', themeSettings: 'Theme Settings', generalSettings: 'General',
     globalConfig: 'Global Configuration', apiKeyLabel: 'Global API Key (used by Claude models)',
-    defaultModel: 'Default Model', maxTokens: 'Max Tokens', saveConfig: 'Save Configuration',
+    defaultModel: 'Default Model', maxTokens: 'Max Tokens', temperature: 'Temperature', saveConfig: 'Save Configuration',
     addModel: 'Add Custom Model', modelName: 'Model Name', modelId: 'Model ID',
     apiEndpoint: 'API Endpoint', apiKeyModel: 'API Key', modelPlaceholderKey: 'Model-specific key (optional)',
     addModelBtn: 'Add Model', addedModels: 'Added Models', noModels: 'No custom models',
@@ -279,7 +279,7 @@ async function init() {
   if (state.config.models && state.config.models.length > 0) {
     for (var i = 0; i < state.config.models.length; i++) {
       var m = state.config.models[i];
-      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider });
+      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider, maxTokens: m.maxTokens, temperature: m.temperature });
     }
   }
 
@@ -2299,17 +2299,22 @@ async function generateResponse() {
   var apiOptions = {
     loopId: loopId,
     messages: apiMessages,
-    workDir: state.workDir
+    workDir: state.workDir,
+    maxTokens: state.config.maxTokens,
+    temperature: state.config.temperature
   };
 
   if (modelConfig) {
     if (modelConfig.endpoint) apiOptions.endpoint = modelConfig.endpoint;
     if (modelConfig.apiKey) apiOptions.apiKey = modelConfig.apiKey;
+    if (modelConfig.maxTokens) apiOptions.maxTokens = modelConfig.maxTokens;
+    if (modelConfig.temperature) apiOptions.temperature = modelConfig.temperature;
     apiOptions.model = modelConfig.id;
   }
 
   try {
-    // 启动 agent loop（异步，通过 IPC 事件接收结果）
+        log('[send] apiOptions: model="' + apiOptions.model + '" temp="' + apiOptions.temperature + '" endpoint="' + (apiOptions.endpoint || 'default') + '"');
+// 启动 agent loop（异步，通过 IPC 事件接收结果）
     window.api.invoke('agent-start', apiOptions).then(function(result) {
       log('Agent loop 返回: ' + JSON.stringify(result.success));
     }).catch(function(err) {
@@ -3952,6 +3957,15 @@ function applyFontSize(px) {
 }
 
 // 设置
+// temperature 滑块实时更新显示值
+function setupTempSlider(sliderId, displayId) {
+  var slider = $(sliderId);
+  var display = $(displayId);
+  if (slider && display) {
+    slider.oninput = function() { display.textContent = parseFloat(this.value).toFixed(2); };
+  }
+}
+
 function openSettings() {
   $('settingsModal').style.display = 'flex';
   // 重置 tab 高亮到 api
@@ -3970,13 +3984,18 @@ function renderSettingsTab(tab) {
       '<div style="font-size:14px;font-weight:600;margin-bottom:16px">' + t('globalConfig') + '</div>' +
       '<div class="form-group"><label>' + t('apiKeyLabel') + '</label><input type="password" id="cfgApiKey" value="' + esc(state.config.apiKey || '') + '" placeholder="sk-ant-..." /></div>' +
       '<div class="form-row"><div class="form-group"><label>' + t('defaultModel') + '</label><select id="cfgModel">' + state.models.map(function(m) { return '<option value="' + m.id + '"' + (m.id === state.config.defaultModel ? ' selected' : '') + '>' + m.name + '</option>'; }).join('') + '</select></div>' +
-      '<div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="cfgMaxTokens" value="' + (state.config.maxTokens || 4096) + '" /></div></div>' +
+      '<div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="cfgMaxTokens" value="' + (state.config.maxTokens || 4096) + '" /></div>' +
+      '<div class="form-group"><label>' + t('temperature') + '</label><input type="range" id="cfgTemperature" min="0" max="2" step="0.05" value="' + (state.config.temperature ?? 0.7) + '" style="width:120px;vertical-align:middle" />' +
+      ' <span id="cfgTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (state.config.temperature ?? 0.7) + '</span></div></div>' +
       '<button class="btn-primary" id="saveApiBtn" style="margin-bottom:20px">' + t('saveConfig') + '</button>' +
       '<div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">' +
       '<div style="font-size:14px;font-weight:600;margin-bottom:12px">' + t('addModel') + '</div>' +
       '<div class="form-group"><label>' + t('modelName') + '</label><input id="customModelName" placeholder="例如: MiniMax" /></div>' +
       '<div class="form-row"><div class="form-group"><label>' + t('modelId') + '</label><input id="customModelId" placeholder="例如: MiniMax-M2.7" /></div>' +
-      '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="customModelEndpoint" placeholder="例如: https://api.minimaxi.com/anthropic" /></div></div>' +
+      '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="customModelEndpoint" placeholder="例如: https://api.minimaxi.com/anthropic" /></div>' +
+      '<div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="customModelMaxTokens" placeholder="默认 ' + (state.config.maxTokens || 8192) + '" /></div></div>' +
+      '<div class="form-group"><label>' + t('temperature') + '</label><input type="range" id="customModelTemperature" min="0" max="2" step="0.05" value="' + (state.config.temperature ?? 0.7) + '" style="width:120px;vertical-align:middle" />' +
+      ' <span id="customModelTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (state.config.temperature ?? 0.7) + '</span></div>' +
       '<div class="form-group"><label>' + t('apiKeyModel') + '</label><input type="password" id="customModelApiKey" placeholder="' + t('modelPlaceholderKey') + '" /></div>' +
       '<button class="btn-primary" id="addCustomBtn">' + t('addModelBtn') + '</button>' +
       '<div style="font-size:13px;font-weight:600;margin:16px 0 8px">' + t('addedModels') + '</div>' +
@@ -3990,12 +4009,15 @@ function renderSettingsTab(tab) {
         await window.api.invoke('set-config', 'apiKey', $('cfgApiKey').value);
         await window.api.invoke('set-config', 'defaultModel', $('cfgModel').value);
         await window.api.invoke('set-config', 'maxTokens', parseInt($('cfgMaxTokens').value));
+        await window.api.invoke('set-config', 'temperature', parseFloat($('cfgTemperature').value));
         state.config = await window.api.invoke('get-config');
         renderModelSelect(); showToast(t('saved'));
       };
     }
 
-
+    // temperature 滑块实时更新显示值
+    setupTempSlider('cfgTemperature', 'cfgTemperatureVal');
+    setupTempSlider('customModelTemperature', 'customModelTemperatureVal');
 
 
     var addBtn = $('addCustomBtn');
@@ -4005,8 +4027,10 @@ function renderSettingsTab(tab) {
         var id = $('customModelId').value.trim();
         var endpoint = $('customModelEndpoint').value.trim();
         var apiKey = $('customModelApiKey').value.trim();
+        var modelMaxTokens = parseInt($('customModelMaxTokens').value) || undefined;
+        var modelTemperature = parseFloat($('customModelTemperature').value) || undefined;
         if (!name || !id) { showToast(t('fillNameId')); return; }
-        await window.api.invoke('add-model', { provider: 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey });
+        await window.api.invoke('add-model', { provider: 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: modelMaxTokens, temperature: modelTemperature });
         state.config.models = await window.api.invoke('get-models');
         rebuildModelList();
         renderModelSelect(); renderModelList();
@@ -4237,6 +4261,7 @@ function renderModelList() {
         '<div class="model-card-detail">ID: ' + esc(m.id) + '</div>' +
         '<div class="model-card-detail">' + t('apiEndpoint') + ': ' + esc(m.endpoint || t('endpointDefault')) + '</div>' +
         '<div class="model-card-detail">' + t('apiKeyModel') + ': ' + (m.apiKey ? t('keySet') : '<span style="color:var(--accent-red)">' + t('keyNotSet') + '</span>') + '</div>' +
+        (m.temperature ? '<div class="model-card-detail">Temp: ' + m.temperature + '</div>' : '') +
       '</div>' +
       '<div class="model-card-actions">' +
         '<button class="btn-sm" data-edit="' + i + '">' + t('editModel') + '</button>' +
@@ -4269,7 +4294,7 @@ function rebuildModelList() {
   if (state.config.models) {
     for (var i = 0; i < state.config.models.length; i++) {
       var m = state.config.models[i];
-      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider });
+      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider, maxTokens: m.maxTokens, temperature: m.temperature });
     }
   }
 }
@@ -4288,6 +4313,9 @@ function openEditModelModal(idx) {
       '<div class="form-group"><label>' + t('modelId') + '</label><input id="editModelId" value="' + esc(m.id) + '" /></div>' +
       '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="editModelEndpoint" value="' + esc(m.endpoint || '') + '" placeholder="https://api.example.com" /></div>' +
       '<div class="form-group"><label>' + t('apiKeyModel') + '</label><input type="password" id="editModelApiKey" value="' + esc(m.apiKey || '') + '" /></div>' +
+      '<div class="form-row"><div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="editModelMaxTokens" value="' + (m.maxTokens || '') + '" placeholder="默认" /></div>' +
+      '<div class="form-group"><label>' + t('temperature') + '</label><input type="range" id="editModelTemperature" min="0" max="2" step="0.05" value="' + (m.temperature ?? state.config.temperature ?? 0.7) + '" style="width:120px;vertical-align:middle" />' +
+      ' <span id="editModelTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (m.temperature ?? state.config.temperature ?? 0.7) + '</span></div></div>' +
       '<div class="modal-actions">' +
         '<button class="btn-secondary edit-cancel-btn">取消</button>' +
         '<button class="btn-primary edit-save-btn">' + t('saveConfig') + '</button>' +
@@ -4299,6 +4327,7 @@ function openEditModelModal(idx) {
   overlay.querySelector('.edit-close-btn').onclick = function() { overlay.remove(); };
   overlay.querySelector('.edit-cancel-btn').onclick = function() { overlay.remove(); };
   overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  setupTempSlider('editModelTemperature', 'editModelTemperatureVal');
 
   overlay.querySelector('.edit-save-btn').onclick = async function() {
     var name = $('editModelName').value.trim();
@@ -4307,8 +4336,10 @@ function openEditModelModal(idx) {
     var apiKey = $('editModelApiKey').value.trim();
     if (!name || !id) { alert(t('fillNameId')); return; }
 
+    var editMaxTokens = parseInt($('editModelMaxTokens').value) || undefined;
+    var editTemperature = parseFloat($('editModelTemperature').value) || undefined;
     var models = state.config.models.slice();
-    models[idx] = { provider: models[idx].provider || 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey };
+    models[idx] = { provider: models[idx].provider || 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: editMaxTokens, temperature: editTemperature };
     await window.api.invoke('set-config', 'models', models);
     state.config.models = models;
     rebuildModelList();

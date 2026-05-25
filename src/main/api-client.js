@@ -72,7 +72,8 @@ async function callAnthropicAPI(messages, tools, system, options) {
     body.tool_choice = { type: 'auto' };
   }
 
-  const response = await fetch(endpoint.replace(/\/anthropic$/i, '') + '/v1/messages', {
+  const url = endpoint.replace(/\/+$/, '').replace(/\/anthropic$/i, '').replace(/\/v1\/?$/i, '') + '/v1/messages';
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -117,7 +118,8 @@ async function callAnthropicStream(messages, tools, system, options, callbacks) 
     body.tool_choice = { type: 'auto' };
   }
 
-  const response = await fetch(endpoint.replace(/\/anthropic$/i, '') + '/v1/messages', {
+  const url = endpoint.replace(/\/+$/, '').replace(/\/anthropic$/i, '').replace(/\/v1\/?$/i, '') + '/v1/messages';
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -330,7 +332,7 @@ async function callOpenAIAPI(messages, tools, system, options) {
     body.tools = getOpenAITools(tools);
   }
 
-  const url = endpoint.replace(/\/anthropic$/i, '') + '/v1/chat/completions';
+  const url = endpoint.replace(/\/+$/, '').replace(/\/anthropic$/i, '').replace(/\/v1\/?$/i, '') + '/v1/chat/completions';
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -404,7 +406,7 @@ async function callOpenAIStream(messages, tools, system, options, callbacks) {
     body.tools = getOpenAITools(tools);
   }
 
-  const url = endpoint.replace(/\/anthropic$/i, '') + '/v1/chat/completions';
+  const url = endpoint.replace(/\/+$/, '').replace(/\/anthropic$/i, '').replace(/\/v1\/?$/i, '') + '/v1/chat/completions';
   const response = await fetch(url, {
     method: 'POST',
     headers: {
