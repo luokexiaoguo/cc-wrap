@@ -1124,8 +1124,9 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('clear-tasks', () => {
-    const { taskClearAll } = require('./tool-executor');
+    const { taskClearAll, clearBackgroundAgents } = require('./tool-executor');
     taskClearAll({ window: mainWindow });
+    clearBackgroundAgents();
     return true;
   });
 
@@ -1873,4 +1874,5 @@ app.on('before-quit', () => {
   try { mcp.closeAll(); } catch (e) { console.error('[MCP] 退出清理失败:', e.message); }
   for (const [, pty] of terminals) { try { pty.kill(); } catch (_) {} }
   terminals.clear();
+  try { require('./tool-executor').clearBackgroundAgents(); } catch (_) {}
 });

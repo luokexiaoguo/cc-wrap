@@ -114,14 +114,28 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'Agent',
-    description: 'Spawn a sub-agent to handle complex tasks. The sub-agent has its own context and can use tools independently.',
+    description: 'Spawn a sub-agent to handle complex tasks. The sub-agent has its own context and can use tools independently. Supports type-specific agents (explore=read-only+cheap, plan=architecture), background execution (run_in_background=true), and worktree isolation (isolation="worktree").',
     input_schema: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: 'Task description for the sub-agent' },
-        description: { type: 'string', description: 'Short description of what the sub-agent will do' }
+        description: { type: 'string', description: 'Short description of what the sub-agent will do' },
+        subagent_type: { type: 'string', enum: ['general-purpose', 'explore', 'plan'], description: 'Agent type: explore (read-only+Haiku for quick research), plan (architecture design), general-purpose (all tools, default)' },
+        run_in_background: { type: 'boolean', description: 'If true, the sub-agent runs in background without blocking. Returns a taskId immediately. Use GetAgentResult tool to poll for results later.' },
+        isolation: { type: 'string', enum: ['worktree'], description: 'If "worktree", runs in an isolated git worktree. Requires a git repository.' }
       },
       required: ['prompt']
+    }
+  },
+  {
+    name: 'GetAgentResult',
+    description: 'Check or retrieve the result of a background agent previously launched with Agent({ run_in_background: true }). Returns { status: "running" } if still in progress, or the full result if completed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'The taskId returned when the background agent was launched via Agent({ run_in_background: true })' }
+      },
+      required: ['taskId']
     }
   },
   {

@@ -10,6 +10,31 @@ const iconv = require('iconv-lite');
 let _envConfig = {};
 function setEnvConfig(env) { _envConfig = env || {}; }
 
+// ==================== Agent 类型系统 ====================
+const AGENT_TYPES = {
+  'explore': {
+    allowTools: ['Glob', 'Grep', 'Read', 'Bash', 'ListDirectory', 'WebSearch', 'WebFetch'],
+    systemPromptSuffix: '\n\n你是一个探索代理，只使用搜索和读取类工具快速调研信息，不要修改任何文件。完成后用中文简洁汇报关键发现。'
+  },
+  'plan': {
+    allowTools: ['Glob', 'Grep', 'Read', 'ListDirectory', 'WebSearch', 'WebFetch'],
+    systemPromptSuffix: '\n\n你是一个架构规划代理，只使用搜索和读取类工具分析代码结构，输出分步实施方案。不要修改任何文件。'
+  }
+};
+
+// 后台 Agent 追踪
+const backgroundAgents = new Map(); // taskId → { promise, status, result, ... }
+
+function clearBackgroundAgents() {
+  backgroundAgents.clear();
+}
+
+function filterToolsByAgentType(tools, type) {
+  const config = AGENT_TYPES[type];
+  if (!config || !config.allowTools) return tools;
+  return tools.filter(t => config.allowTools.includes(t.name));
+}
+
 // 读文件 + 自动识别编码（UTF-8 BOM / UTF-16 LE/BE / 严格 UTF-8 / GBK 兜底）
 function readTextSmart(filePath) {
   const buf = fs.readFileSync(filePath);
@@ -1379,16 +1404,39 @@ function askUserQuestion(input, ctx) {
 
 // ==================== 子代理（独立上下文窗口）====================
 
-async function agent(input, ctx) {
-  const { prompt, description } = input;
-  if (!prompt) return { error: 'prompt is required' };
+// 工作树隔离：在临时 git worktree 中执行
+async function withWorktree(workDir, fn) {
+  const { execSync } = require('child_process');
+  try {
+    execSync('git rev-parse --git-dir', { cwd: workDir, stdio: 'pipe', encoding: 'utf-8' });
+  } catch {
+    return { error: 'isolation: "worktree" 需要 git 仓库' };
+  }
+  const ts = Date.now();
+  const branchName = `cc-agent-${ts}-${Math.random().toString(36).slice(2, 6)}`;
+  const worktreePath = path.join(path.dirname(path.resolve(workDir)), `.claude-worktree-${branchName}`);
+  try {
+    execSync(`git worktree add --detach "${worktreePath}" HEAD`, { cwd: workDir, stdio: 'pipe', timeout: 15000 });
+    execSync(`git checkout -b "${branchName}"`, { cwd: worktreePath, stdio: 'pipe', timeout: 10000 });
+    const result = await fn(worktreePath, branchName);
+    try { execSync(`git worktree remove "${worktreePath}"`, { cwd: workDir, stdio: 'pipe', timeout: 10000 }); } catch {}
+    try { execSync(`git branch -D "${branchName}"`, { cwd: workDir, stdio: 'pipe' }); } catch {}
+    return result;
+  } catch (err) {
+    try { execSync(`git worktree remove "${worktreePath}" --force`, { cwd: workDir, stdio: 'pipe' }); } catch {}
+    try { execSync(`git branch -D "${branchName}"`, { cwd: workDir, stdio: 'pipe' }); } catch {}
+    return { error: `Worktree 隔离失败: ${err.message}` };
+  }
+}
 
+// 子代理核心执行逻辑（被 agent() 调用，支持前台/后台/工作树）
+async function runSubAgent(input, ctx) {
+  const { prompt, description, subagent_type = 'general-purpose' } = input;
   const { workDir, signal, window: mainWindow, apiConfig, toolCallId } = ctx;
   if (!apiConfig || !apiConfig.apiKey) {
     return { error: '子 Agent 启动失败：API 配置未传入' };
   }
 
-  // IPC 广播辅助：向渲染端发送子 Agent 事件，附带 subAgentId 用于路由到父工具卡片
   const sendSub = (channel, data) => {
     if (mainWindow && mainWindow.webContents && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(channel, { ...data, subAgentId: toolCallId });
@@ -1409,21 +1457,23 @@ async function agent(input, ctx) {
       memories = Array.isArray(memData.memories) ? memData.memories : [];
     } catch (_) {}
 
+    const typeConfig = AGENT_TYPES[subagent_type];
     const system = buildSystemPrompt({
       workDir: workDir || process.cwd(),
       memories,
       activeSkills: [],
       customPrompt: ''
-    }) + '\n\n你是 cc-wrap 的子代理任务，专注于执行分配给你的任务。完成后简要汇报结果。';
+    }) + '\n\n你是 cc-wrap 的子代理任务，专注于执行分配给你的任务。完成后简要汇报结果。'
+      + (typeConfig ? typeConfig.systemPromptSuffix : '');
 
-    // 2. 获取工具定义（内置 + MCP）
+    // 2. 获取工具定义并按 Agent 类型过滤
     const builtinTools = getEnabledTools();
     let mcpTools = [];
     try {
       const mcpClient = require('./mcp-client');
       mcpTools = mcpClient.getAllMcpTools ? (mcpClient.getAllMcpTools() || []) : [];
     } catch (_) {}
-    const tools = mergeTools(builtinTools, mcpTools);
+    const tools = filterToolsByAgentType(mergeTools(builtinTools, mcpTools), subagent_type);
 
     // 3. 初始化子对话上下文
     const subMessages = [
@@ -1458,7 +1508,6 @@ async function agent(input, ctx) {
           {
             onText: (text) => {
               fullText += text;
-              // 实时推送到渲染端
               sendSub('agent-stream-text', { text });
             },
             onToolUse: (id, name, input) => {
@@ -1523,6 +1572,64 @@ async function agent(input, ctx) {
   }
 }
 
+// Agent 工具主入口：路由到前台/后台/工作树执行
+async function agent(input, ctx) {
+  const { prompt, description, subagent_type = 'general-purpose', run_in_background = false, isolation } = input;
+  if (!prompt) return { error: 'prompt is required' };
+
+  // 1. Worktree 隔离
+  if (isolation === 'worktree') {
+    return await withWorktree(ctx.workDir, async (wtDir) => {
+      return await runSubAgent({ ...input, isolation: undefined }, { ...ctx, workDir: wtDir });
+    });
+  }
+
+  // 2. 后台执行
+  if (run_in_background) {
+    const taskId = `bg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // 后台 Agent 不继承父的取消信号，独立生命周期
+    const bgCtx = { workDir: ctx.workDir, window: ctx.window, apiConfig: ctx.apiConfig, toolCallId: ctx.toolCallId };
+    const agentPromise = runSubAgent(input, bgCtx);
+
+    backgroundAgents.set(taskId, {
+      promise: agentPromise,
+      status: 'running',
+      type: subagent_type,
+      description: description || '',
+      startedAt: Date.now()
+    });
+
+    agentPromise.then(result => {
+      const entry = backgroundAgents.get(taskId);
+      if (entry) { entry.status = 'completed'; entry.result = result; entry.completedAt = Date.now(); }
+    }).catch(err => {
+      const entry = backgroundAgents.get(taskId);
+      if (entry) { entry.status = 'failed'; entry.error = err.message; }
+    });
+
+    return { content: JSON.stringify({ taskId, status: 'running', type: subagent_type }) };
+  }
+
+  // 3. 前台执行（默认）
+  return await runSubAgent(input, ctx);
+}
+
+// 查询后台 Agent 结果
+async function getAgentResult(input, ctx) {
+  const { taskId } = input;
+  if (!taskId) return { error: 'taskId 是必需的' };
+  const entry = backgroundAgents.get(taskId);
+  if (!entry) return { error: `未找到后台 Agent: ${taskId}` };
+  if (entry.status === 'running') {
+    return { content: JSON.stringify({ taskId, status: 'running', type: entry.type, startedAt: entry.startedAt }) };
+  }
+  if (entry.status === 'failed') {
+    return { error: `后台 Agent 失败: ${entry.error}` };
+  }
+  // completed
+  return entry.result;
+}
+
 // ==================== 统一调度 ====================
 
 const TOOL_HANDLERS = {
@@ -1536,6 +1643,7 @@ const TOOL_HANDLERS = {
   WebSearch: webSearch,
   WebFetch: webFetch,
   Agent: agent,
+  GetAgentResult: getAgentResult,
   TaskCreate: taskCreate,
   TaskUpdate: taskUpdate,
   InstallSkill: installSkill,
@@ -1582,4 +1690,4 @@ async function executeTool(toolName, input, context = {}) {
   return { error: `Unknown tool: ${toolName}` };
 }
 
-module.exports = { executeTool, taskStore, taskGetAll, taskClearAll, readTextSmart, setEnvConfig };
+module.exports = { executeTool, taskStore, taskGetAll, taskClearAll, readTextSmart, setEnvConfig, clearBackgroundAgents };
