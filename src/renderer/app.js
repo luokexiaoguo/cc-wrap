@@ -4292,7 +4292,7 @@ function renderSettingsTab(tab) {
     } else {
       var endDate = new Date(today);
       var startDate = new Date(today);
-      startDate.setFullYear(startDate.getFullYear() - 1);
+      startDate.setMonth(startDate.getMonth() - 6);
       startDate.setDate(startDate.getDate() - startDate.getDay());
       var weeks = [];
       var cursor = new Date(startDate);
@@ -4312,10 +4312,14 @@ function renderSettingsTab(tab) {
       var lang = (state.config && state.config.language) || 'zh';
       var dayLabels = lang === 'zh' ? ['日','一','二','三','四','五','六'] : ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
       var monthLabels = [];
+      var lastYear = null;
       for (var w = 0; w < weeks.length; w++) {
         var fd = weeks[w][0].date;
         var m = fd.getMonth(), y = fd.getFullYear();
-        monthLabels.push((w === 0 || weeks[w-1][0].date.getMonth() !== m) ? (y + '/' + (m + 1)) : '');
+        if (w === 0 || weeks[w-1][0].date.getMonth() !== m) {
+          monthLabels.push(y !== lastYear ? (y + '/' + (m + 1)) : (m + 1));
+          lastYear = y;
+        } else { monthLabels.push(''); }
       }
       function getLevel(tokens) {
         if (!tokens || tokens === 0) return 0;
@@ -4337,7 +4341,7 @@ function renderSettingsTab(tab) {
           var level = getLevel(cell.data ? cell.data.tokens : 0);
           var tokenStr = cell.data ? _fmtTok(cell.data.tokens) : '0';
           var convStr = cell.data ? cell.data.convCount : '0';
-          html += '<span class="heatmap-cell lv' + level + '" title="' + cell.dayStr + '\n' + tokenStr + ' tokens\n' + convStr + ' ' + t('sessions') + '"></span>';
+          html += '<span class="heatmap-cell lv' + level + '" title="日期: ' + cell.dayStr + '&#10;' + tokenStr + ' tokens&#10;' + convStr + ' ' + t('sessions') + '"></span>';
         }
         html += '</div>';
       }
