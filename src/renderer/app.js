@@ -1739,14 +1739,25 @@ function initTerminal() {
     term.open(container);
     fitAddon.fit();
 
-    // Ctrl+Shift+C 复制 / Ctrl+V、Ctrl+Shift+V 粘贴
+    // 终端复制粘贴
     term.attachCustomKeyEventHandler(function(e) {
       if (e.type === 'keydown' && e.ctrlKey) {
+        // Ctrl+C: 有选中内容时复制，否则放行到终端（SIGINT）
+        if (e.code === 'KeyC' && !e.shiftKey) {
+          var sel = term.getSelection();
+          if (sel) {
+            window.api.clipboard.writeText(sel);
+            return false;
+          }
+          return true;
+        }
+        // Ctrl+Shift+C: 强制复制
         if (e.code === 'KeyC' && e.shiftKey) {
           var sel = term.getSelection();
           if (sel) window.api.clipboard.writeText(sel);
           return false;
         }
+        // Ctrl+V / Ctrl+Shift+V: 粘贴
         if (e.code === 'KeyV') {
           try {
             var text = window.api.clipboard.readText();
@@ -1760,15 +1771,21 @@ function initTerminal() {
       return true;
     });
 
-    // 终端内右键粘贴
+    // 终端内右键: 有选中内容时复制，否则粘贴
     container.addEventListener('contextmenu', function(e) {
       e.preventDefault();
-      try {
-        var text = window.api.clipboard.readText();
-        if (text && state.terminalId) {
-          window.api.invoke('terminal-write', { terminalId: state.terminalId, data: text });
-        }
-      } catch (_) {}
+      var sel = term.getSelection();
+      if (sel) {
+        window.api.clipboard.writeText(sel);
+        term.clearSelection();
+      } else {
+        try {
+          var text = window.api.clipboard.readText();
+          if (text && state.terminalId) {
+            window.api.invoke('terminal-write', { terminalId: state.terminalId, data: text });
+          }
+        } catch (_) {}
+      }
     });
 
     term.onData(function(data) {

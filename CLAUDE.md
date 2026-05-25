@@ -121,6 +121,8 @@ Single ~4850-line file holding a global `state` object
 
 **Token statistics**: Sidebar per-conversation token display has been removed in favor of a Settings > Token Stats tab with a GitHub-style contribution heatmap. Summary cards show today/yesterday/last 30 days. `/cost` slash command still shows full breakdown per-message and across all conversations.
 
+**Token heatmap timezone**: All date grouping uses `toLocalDay()` (wraps `getFullYear()/getMonth()/getDate()`) not `toISOString()` — the latter returns UTC and causes date-offset bugs for non-UTC users (e.g. Beijing UTC+8 at midnight shows as previous day in UTC). Any new date extraction from timestamps must use local timezone methods.
+
 **Export conversation**: the toolbar "导出" button formats conversation as Markdown and calls `export-conversation` IPC which opens a native save dialog (default directory = workDir).
 
 ```text
@@ -156,6 +158,7 @@ Bottom panel terminal (VS Code 风格), 通过 `node-pty` + `xterm.js` 实现。
 - 关闭面板再打开时终端进程保持，重新 attach
 - `Ctrl+`` 快捷键切换终端面板
 - 需要 `electron-rebuild` 重新编译 node-pty 原生模块
+- **复制粘贴行为**: `Ctrl+C`（无 Shift）在选中文字时复制，未选中时放行到终端（SIGINT）；`Ctrl+Shift+C` 强制复制；`Ctrl+V`/`Ctrl+Shift+V` 粘贴；右键单击：有选中时复制并清除选中，无选中时粘贴
 
 ## Persistence layout
 
@@ -193,3 +196,4 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 - **Conversation flush on completion**: `flushConversations()` is called on `agent-complete` — don't replace it with `saveConversations()` (which is debounced 300ms and risks losing data if the process crashes immediately after).
 - **OpenAI image stripping**: if you add a new vision model, update `modelSupportsVision` regex in `api-client.js`, otherwise users with that model will hit the same 400 cycle that broke DeepSeek before.
 - **File tree not loading**: `loadFileTree()` must be called after every code path that sets `state.workDir`. The three paths are `init()` (startup), settings panel "select" button, and `/workdir` command. Missing this call means the sidebar file tree stays empty even though the path is persisted in config.
+- **`esc()` type-safety**: the `esc()` function calls `.replace()` on its argument — passing a Number causes `text.replace is not a function` TypeError. Always wrap values in `String()` before passing to `esc()`, especially computed values like `month + 1`. 
