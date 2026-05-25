@@ -121,7 +121,8 @@ async function runAgentLoop(mainWindow, options) {
       apiKey: apiConfig.apiKey || '',
       endpoint: apiConfig.endpoint || 'https://api.anthropic.com',
       maxTokens: apiConfig.maxTokens || 8192,
-      temperature: apiConfig.temperature ?? 0.7
+      temperature: apiConfig.temperature ?? 0.7,
+      reasoningEffort: apiConfig.reasoningEffort || null
     };
 
     if (!config.apiKey) {
@@ -133,10 +134,8 @@ async function runAgentLoop(mainWindow, options) {
     let round = 0;
     let totalUsage = { input_tokens: 0, output_tokens: 0 };
 
-    // 卡住检测：连续失败追踪
-    let consecutiveFails = 0;
-    let lastToolFamily = '';
-    let familyRounds = 0;
+    // 卡住检测：滑动窗口追踪最近 8 轮的失败率
+    let roundHistory = [];
     let stuckHintInjected = false;
 
     while (round < MAX_ROUNDS) {
@@ -314,9 +313,11 @@ async function runAgentLoop(mainWindow, options) {
           ? `错误: ${result.error}`
           : (result.content || JSON.stringify(result));
 
-        // 截断过大的工具结果（超过 3000 字符），避免撑爆上下文
-        const truncated = typeof resultContent === 'string' && resultContent.length > 3000
-          ? resultContent.substring(0, 2500) + `\n... [结果过长，省略 ${resultContent.length - 2500} 字符]`
+        // 截断过大的工具结果，避免撑爆上下文
+        // 普通结果 1500 字符截断，错误结果 600 字符截断（错误信息通常前三行就能说明问题）
+        const truncateLimit = result.error ? 600 : 1500;
+        const truncated = typeof resultContent === 'string' && resultContent.length > truncateLimit
+          ? resultContent.substring(0, truncateLimit) + `\n... [结果过长，省略 ${resultContent.length - truncateLimit} 字符]`
           : resultContent;
 
         toolResults.push({
@@ -341,28 +342,24 @@ async function runAgentLoop(mainWindow, options) {
           content: toolResults
         });
 
-        // 卡住检测：统计连续失败的工具调用
-        let roundAllFailed = toolResults.every(r => typeof r.content === 'string' && r.content.startsWith('错误:'));
-        if (roundAllFailed) {
-          consecutiveFails += toolResults.length;
-          const currentFamily = toolCalls.length > 0 ? _toolFamily(toolCalls[0].name, toolCalls[0].input) : '';
-          if (currentFamily === lastToolFamily) familyRounds++;
-          else { familyRounds = 1; lastToolFamily = currentFamily; }
+        // 卡住检测：滑动窗口统计最近 8 轮的失败率
+        // 相比"连续失败计数"，滑动窗口更能捕捉"大多数尝试都在失败"的模式
+        // 即使偶尔成功一轮也不会重置计数
+        const roundFailed = toolResults.some(r => typeof r.content === 'string' && r.content.startsWith('错误:'));
+        const currentFamily = toolCalls.length > 0 ? _toolFamily(toolCalls[0].name, toolCalls[0].input) : '';
+        roundHistory.push({ failed: roundFailed, family: currentFamily, count: toolCalls.length });
+        if (roundHistory.length > 8) roundHistory.shift();
 
-          const hint = _checkStuck(consecutiveFails, familyRounds, currentFamily);
-          if (hint && !stuckHintInjected) {
-            console.log(`[Agent Loop] 检测到卡住，注入策略提示 (连续失败: ${consecutiveFails})`);
-            stuckHintInjected = true;
-            currentMessages.push({
-              role: 'user',
-              content: [{ type: 'text', text: hint }]
-            });
-          }
-        } else {
-          consecutiveFails = 0;
-          familyRounds = 0;
-          lastToolFamily = '';
-          stuckHintInjected = false;
+        const failRounds = roundHistory.filter(r => r.failed).length;
+        const allSameFamily = roundHistory.length > 2 && roundHistory.every(r => r.family === roundHistory[0].family);
+        const hint = _checkStuckSliding(failRounds, roundHistory.length, allSameFamily);
+        if (hint && !stuckHintInjected) {
+          console.log(`[Agent Loop] 检测到卡住（滑动窗口 ${failRounds}/${roundHistory.length} 轮失败），注入策略提示`);
+          stuckHintInjected = true;
+          currentMessages.push({
+            role: 'user',
+            content: [{ type: 'text', text: hint }]
+          });
         }
       }
     }
@@ -395,11 +392,12 @@ function _toolFamily(name, input) {
 }
 
 /**
- * 检测是否"卡住"了：连续 N 轮相同类型的工具调用全部失败
+ * 检测是否"卡住"了：滑动窗口中失败率过半且至少失败 3 轮
  */
-function _checkStuck(consecutiveFails, familyRounds, currentFamily) {
-  if (consecutiveFails < 3) return '';
-  return `[系统提示] 你连续 ${consecutiveFails} 次调用以错误告终${familyRounds > 0 ? `（连续 ${familyRounds} 轮调用 ${currentFamily} 类工具）` : ''}。请立即停止当前策略，换一种完全不同的方法，或直接告知用户失败原因。不要重复尝试类似的请求。`;
+function _checkStuckSliding(failRounds, totalRounds, allSameFamily) {
+  if (failRounds < 3 || failRounds / totalRounds < 0.5) return '';
+  const familyHint = allSameFamily ? '（大多数都是同一类工具）' : '';
+  return `[系统提示] 最近 ${totalRounds} 轮中有 ${failRounds} 轮工具调用失败${familyHint}。请立即停止当前策略，换一种完全不同的方法，或直接告知用户失败原因。不要再重复尝试类似的操作。`;
 }
 
 /**
@@ -443,8 +441,46 @@ async function compactMessages(mainWindow, messages, config, estimatedTokens) {
   }
   keepCount = Math.min(keepCount, Math.max(0, messages.length - 2));
 
-  const recentMsgs = messages.slice(-keepCount);
-  const msgsToSummarize = messages.slice(0, -keepCount);
+  // 除了保留最近的 keepCount 条消息外，额外扫描并保留包含重要文字内容的助手消息
+  // 解决工具调用过多时 AI 之前输出的方案/编号被压缩丢失的问题
+  let recentMsgs = messages.slice(-keepCount);
+  const boundary = messages.length - keepCount;
+
+  // 从 boundary 往前找最近的 2 条包含实质文字内容的 assistant 消息
+  // 这条消息要么还没在 recentMsgs 里（被工具调用的 flood 挤出窗口了），
+  // 如果已经在 recentMsgs 里则跳过
+  const existingIndexes = new Set();
+  for (let j = 0; j < recentMsgs.length; j++) {
+    existingIndexes.add(messages.length - keepCount + j);
+  }
+  let textAssistantAdded = 0;
+  for (let i = boundary - 1; i >= 0 && textAssistantAdded < 2; i--) {
+    if (existingIndexes.has(i)) continue;
+    const m = messages[i];
+    if (m.role !== 'assistant') continue;
+    let text = '';
+    if (typeof m.content === 'string') {
+      text = m.content;
+    } else if (Array.isArray(m.content)) {
+      for (const block of m.content) {
+        if (block.type === 'text' && block.text) text += block.text;
+      }
+    }
+    // 只有文字内容 > 50 字符才认为是"有实质内容的"（过滤纯工具调用消息）
+    if (text.length > 50) {
+      recentMsgs.unshift(m);
+      textAssistantAdded++;
+    }
+  }
+
+  // 计算哪些消息需要被压缩（排除已留在 recentMsgs 中的）
+  const preservedIndexes = new Set();
+  for (let j = messages.length - keepCount; j < messages.length; j++) preservedIndexes.add(j);
+  // 加上额外保留的 assistant 消息的位置
+  for (let i = 0; i < messages.length - keepCount; i++) {
+    if (recentMsgs.includes(messages[i])) preservedIndexes.add(i);
+  }
+  const msgsToSummarize = messages.filter((_, i) => !preservedIndexes.has(i));
 
   // 构建摘要请求：传递更完整的内容让摘要更精确
   const MAX_PER_MSG = 2000;

@@ -52,13 +52,34 @@ function shouldUseAnthropicFormat(endpoint, model) {
   return false;
 }
 
+/**
+ * 根据 reasoningEffort 设置修改请求体
+ * @param {object} body - 请求体对象（会被原地修改）
+ * @param {string|null} effort - 'off'|'low'|'medium'|'high'|null
+ * @param {boolean} isAnthropic - 是否为 Anthropic 格式
+ */
+function applyReasoningEffort(body, effort, isAnthropic) {
+  if (!effort || effort === 'off') return;
+
+  if (isAnthropic) {
+    // Anthropic Adaptive Thinking (Opus 4.6+, Sonnet 4.6+)
+    const effortMap = { low: 'low', medium: 'medium', high: 'high' };
+    body.thinking = { type: 'adaptive' };
+    body.output_config = { effort: effortMap[effort] || 'high' };
+  } else {
+    // OpenAI 兼容格式：reasoning_effort 作为顶级字段
+    // 不支持的模型会静默忽略此参数
+    body.reasoning_effort = effort;
+  }
+}
+
 // ==================== Anthropic 格式 ====================
 
 /**
  * Anthropic 非流式 API 调用
  */
 async function callAnthropicAPI(messages, tools, system, options) {
-  const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7 } = options;
+  const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7, reasoningEffort } = options;
 
   const body = {
     model,
@@ -66,6 +87,7 @@ async function callAnthropicAPI(messages, tools, system, options) {
     temperature,
     messages,
   };
+  applyReasoningEffort(body, reasoningEffort, true);
   if (system) body.system = system;
   if (tools && tools.length > 0) {
     body.tools = tools;
@@ -102,7 +124,7 @@ async function callAnthropicAPI(messages, tools, system, options) {
  * 回调: onText(text), onToolUse(id, name, input), onComplete(stopReason, usage)
  */
 async function callAnthropicStream(messages, tools, system, options, callbacks) {
-  const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7 } = options;
+  const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7, reasoningEffort } = options;
   const { onText, onToolUse, onComplete } = callbacks;
 
   const body = {
@@ -112,6 +134,7 @@ async function callAnthropicStream(messages, tools, system, options, callbacks) 
     stream: true,
     messages,
   };
+  applyReasoningEffort(body, reasoningEffort, true);
   if (system) body.system = system;
   if (tools && tools.length > 0) {
     body.tools = tools;
@@ -319,7 +342,7 @@ function toOpenAIMessagesWithTools(messages, system, model) {
  * OpenAI 非流式 API 调用
  */
 async function callOpenAIAPI(messages, tools, system, options) {
-  const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7 } = options;
+  const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7, reasoningEffort } = options;
 
   const oaiMessages = toOpenAIMessagesWithTools(messages, system, model);
   const body = {
@@ -328,6 +351,7 @@ async function callOpenAIAPI(messages, tools, system, options) {
     temperature,
     messages: oaiMessages,
   };
+  applyReasoningEffort(body, reasoningEffort, false);
   if (tools && tools.length > 0) {
     body.tools = getOpenAITools(tools);
   }
@@ -390,7 +414,7 @@ async function callOpenAIAPI(messages, tools, system, options) {
  * OpenAI 流式 API 调用
  */
 async function callOpenAIStream(messages, tools, system, options, callbacks) {
-  const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7 } = options;
+  const { model, apiKey, endpoint, maxTokens = 8192, temperature = 0.7, reasoningEffort } = options;
   const { onText, onToolUse, onComplete } = callbacks;
 
   const oaiMessages = toOpenAIMessagesWithTools(messages, system, model);
@@ -402,6 +426,7 @@ async function callOpenAIStream(messages, tools, system, options, callbacks) {
     stream_options: { include_usage: true },
     messages: oaiMessages,
   };
+  applyReasoningEffort(body, reasoningEffort, false);
   if (tools && tools.length > 0) {
     body.tools = getOpenAITools(tools);
   }

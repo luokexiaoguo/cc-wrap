@@ -1279,7 +1279,8 @@ app.whenReady().then(() => {
         apiKey: options.apiKey || config.apiKey,
         endpoint: options.endpoint || config.apiEndpoint,
         maxTokens: options.maxTokens || config.maxTokens,
-        temperature: options.temperature ?? config.temperature
+        temperature: options.temperature ?? config.temperature,
+        reasoningEffort: options.reasoningEffort || null
       }
     };
 

@@ -282,6 +282,28 @@ body.light-theme .titlebar-drag { color: var(--text-primary); }
 .conversation-item:hover .del { opacity: 0.6; }
 .conversation-item .del:hover { opacity: 1; color: var(--accent-red); }
 
+/* 侧边栏生成中动画指示器：三个流动的点 */
+.conversation-item.generating .generating-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+}
+.conversation-item.generating .generating-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: inline-block;
+  animation: generatingDot 1.4s infinite ease-in-out;
+}
+.conversation-item.generating .generating-dots span:nth-child(2) { animation-delay: 0.16s; }
+.conversation-item.generating .generating-dots span:nth-child(3) { animation-delay: 0.32s; }
+@keyframes generatingDot {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
 .file-toolbar { padding: 10px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center; }
 .current-dir { font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .file-actions { padding: 6px 10px; border-bottom: 1px solid var(--border); display: flex; gap: 4px; align-items: center; }

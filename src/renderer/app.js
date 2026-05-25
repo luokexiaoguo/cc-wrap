@@ -22,6 +22,7 @@ var I18N = {
     endpointDefault: '默认', keySet: '已设置', keyNotSet: '未设置',
     editModel: '编辑', deleteModel: '删除', confirmDelete: '确定删除模型',
     saved: '已保存', added: '已添加', fillNameId: '请填写模型名称和ID',
+    reasoningEffort: '思考级别', effortOff: '关闭', effortLow: '低', effortMedium: '中', effortHigh: '高',
     // 主题
     chooseTheme: '选择主题', darkMode: '深色模式', lightMode: '浅色模式',
     // 通用
@@ -58,6 +59,7 @@ var I18N = {
     endpointDefault: 'default', keySet: 'Set', keyNotSet: 'Not set',
     editModel: 'Edit', deleteModel: 'Delete', confirmDelete: 'Are you sure you want to delete model',
     saved: 'Saved', added: 'Added', fillNameId: 'Please enter model name and ID',
+    reasoningEffort: 'Reasoning Effort', effortOff: 'Off', effortLow: 'Low', effortMedium: 'Medium', effortHigh: 'High',
     // Theme
     chooseTheme: 'Choose Theme', darkMode: 'Dark Mode', lightMode: 'Light Mode',
     // General
@@ -134,6 +136,7 @@ const state = {
   workDir: '',
   memories: [],
   isGenerating: false,
+  generatingConversationId: null,
   attachedImage: null,
   attachedFiles: [],
   tasks: [],
@@ -284,7 +287,7 @@ async function init() {
   if (state.config.models && state.config.models.length > 0) {
     for (var i = 0; i < state.config.models.length; i++) {
       var m = state.config.models[i];
-      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider, maxTokens: m.maxTokens, temperature: m.temperature });
+      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider, maxTokens: m.maxTokens, temperature: m.temperature, reasoningEffort: m.reasoningEffort || 'off' });
     }
   }
 
@@ -859,8 +862,25 @@ function setupEvents() {
 
   // 流式文本 — 直接追加到最后一个消息的 DOM，避免全量重绘
   window.api.on('agent-stream-text', function(data) {
+    var isGenConv = state.generatingConversationId && state.generatingConversationId === state.currentConversation.id;
+
     // 子 Agent 文本 → 路由到父工具卡片内的 subagent 容器
     if (data.subAgentId) {
+      // 更新数据模型（始终找到 generating 对话）
+      var genConv = state.conversations.find(function(c) { return c.id === state.generatingConversationId; });
+      if (genConv) {
+        var genLastMsg = genConv.messages[genConv.messages.length - 1];
+        if (genLastMsg && genLastMsg.toolCalls) {
+          var parentTc = genLastMsg.toolCalls.find(function(t) { return t.id === data.subAgentId; });
+          if (parentTc) {
+            if (!parentTc.subAgentEvents) parentTc.subAgentEvents = [];
+            parentTc.subAgentEvents.push({ type: 'text', text: data.text });
+          }
+        }
+      }
+      // 非 generating 对话跳过 DOM 更新
+      if (!isGenConv) return;
+
       var messagesEl = $('messages');
       if (!messagesEl) return;
       var parentCard = messagesEl.querySelector('.tool-call[data-tc-id="' + esc(data.subAgentId) + '"]');
@@ -874,30 +894,26 @@ function setupEvents() {
         body.appendChild(container);
       }
       container.appendChild(document.createTextNode(data.text));
-      // 累积到数据模型以便 re-render
-      var conv = state.currentConversation;
-      if (conv) {
-        var lastMsg = conv.messages[conv.messages.length - 1];
-        if (lastMsg && lastMsg.toolCalls) {
-          var parentTc = lastMsg.toolCalls.find(function(t) { return t.id === data.subAgentId; });
-          if (parentTc) {
-            if (!parentTc.subAgentEvents) parentTc.subAgentEvents = [];
-            parentTc.subAgentEvents.push({ type: 'text', text: data.text });
-          }
-        }
-      }
+
       var chatArea = $('chatArea');
       if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
       return;
     }
 
-    var conv = state.currentConversation;
-    if (!conv) return;
-    var lastMsg = conv.messages[conv.messages.length - 1];
-    if (!lastMsg || lastMsg.role !== 'assistant') return;
+    // 更新 generating 对话的数据模型
+    var genConv = state.conversations.find(function(c) { return c.id === state.generatingConversationId; });
+    if (!genConv) return;
+    var genLastMsg = genConv.messages[genConv.messages.length - 1];
+    if (!genLastMsg || genLastMsg.role !== 'assistant') {
+      // 当前查看的对话不是 generating 对话时，genConv 不一定在页面显示，但数据仍要更新
+      return;
+    }
+    genLastMsg.content += data.text;
 
-    lastMsg.content += data.text;
     setThinking(true, '写入回复...');
+
+    // 非 generating 对话跳过 DOM 更新和滚动
+    if (!isGenConv) return;
 
     // 找到最后一个 assistant 消息的 .msg-content 元素，直接追加文本
     var messagesEl = $('messages');
@@ -934,8 +950,25 @@ function setupEvents() {
 
   // 工具调用开始 — 增量插入 DOM，不全量重绘（修复授权弹窗卡顿的核心）
   window.api.on('agent-stream-tool-start', function(data) {
+    var isGenConv = state.generatingConversationId && state.generatingConversationId === state.currentConversation.id;
+
     // 子 Agent 工具调用 → 嵌套到父工具卡片的 subagent 容器内
     if (data.subAgentId) {
+      // 更新 generating 对话的数据模型
+      var genConv = state.conversations.find(function(c) { return c.id === state.generatingConversationId; });
+      if (genConv) {
+        var genLastMsg = genConv.messages[genConv.messages.length - 1];
+        if (genLastMsg && genLastMsg.toolCalls) {
+          var parentTc = genLastMsg.toolCalls.find(function(t) { return t.id === data.subAgentId; });
+          if (parentTc) {
+            if (!parentTc.subAgentEvents) parentTc.subAgentEvents = [];
+            parentTc.subAgentEvents.push({ type: 'tool_start', id: data.id, name: data.name, input: JSON.stringify(data.input, null, 2), status: 'running' });
+          }
+        }
+      }
+      // 非 generating 对话跳过 DOM 更新
+      if (!isGenConv) return;
+
       var messagesEl = $('messages');
       if (!messagesEl) return;
       var parentCard = messagesEl.querySelector('.tool-call[data-tc-id="' + esc(data.subAgentId) + '"]');
@@ -958,26 +991,15 @@ function setupEvents() {
       var wrapper = document.createElement('div');
       wrapper.innerHTML = renderToolCallHTML(tcObj);
       container.appendChild(wrapper.firstChild);
-      // 累积到数据模型
-      var conv = state.currentConversation;
-      if (conv) {
-        var lastMsg = conv.messages[conv.messages.length - 1];
-        if (lastMsg && lastMsg.toolCalls) {
-          var parentTc = lastMsg.toolCalls.find(function(t) { return t.id === data.subAgentId; });
-          if (parentTc) {
-            if (!parentTc.subAgentEvents) parentTc.subAgentEvents = [];
-            parentTc.subAgentEvents.push({ type: 'tool_start', id: data.id, name: data.name, input: JSON.stringify(data.input, null, 2), status: 'running' });
-          }
-        }
-      }
       return;
     }
 
-    var conv = state.currentConversation;
-    if (!conv) return;
-    var lastMsg = conv.messages[conv.messages.length - 1];
-    if (!lastMsg || lastMsg.role !== 'assistant') return;
-    if (!lastMsg.toolCalls) lastMsg.toolCalls = [];
+    // 更新 generating 对话的数据模型
+    var genConv = state.conversations.find(function(c) { return c.id === state.generatingConversationId; });
+    if (!genConv) return;
+    var genLastMsg = genConv.messages[genConv.messages.length - 1];
+    if (!genLastMsg || genLastMsg.role !== 'assistant') return;
+    if (!genLastMsg.toolCalls) genLastMsg.toolCalls = [];
     var tc = {
       id: data.id,
       name: data.name,
@@ -985,7 +1007,11 @@ function setupEvents() {
       result: '',
       status: 'running'
     };
-    lastMsg.toolCalls.push(tc);
+    genLastMsg.toolCalls.push(tc);
+
+    // 非 generating 对话跳过 DOM 更新
+    if (!isGenConv) return;
+
     setThinking(true, '调用工具: ' + data.name);
     // 增量插入失败时（DOM 已被其他原因清空），才回退到全量重绘
     if (!appendToolCallIncremental(tc)) renderMessages();
@@ -1097,15 +1123,16 @@ function setupEvents() {
 
   // 工具调用结果 — 增量更新对应工具卡片
   window.api.on('agent-stream-tool-result', function(data) {
+    var isGenConv = state.generatingConversationId && state.generatingConversationId === state.currentConversation.id;
+
     // 子 Agent 工具结果 → 更新嵌套卡片 + 累积数据模型
     if (data.subAgentId) {
-      var tcObj = { result: data.result, status: data.error ? 'error' : 'done' };
-      updateToolCallIncremental(data.id, tcObj);
-      var conv = state.currentConversation;
-      if (conv) {
-        var lastMsg = conv.messages[conv.messages.length - 1];
-        if (lastMsg && lastMsg.toolCalls) {
-          var parentTc = lastMsg.toolCalls.find(function(t) { return t.id === data.subAgentId; });
+      // 更新 generating 对话的数据模型
+      var genConv = state.conversations.find(function(c) { return c.id === state.generatingConversationId; });
+      if (genConv) {
+        var genLastMsg = genConv.messages[genConv.messages.length - 1];
+        if (genLastMsg && genLastMsg.toolCalls) {
+          var parentTc = genLastMsg.toolCalls.find(function(t) { return t.id === data.subAgentId; });
           if (parentTc && parentTc.subAgentEvents) {
             for (var k = parentTc.subAgentEvents.length - 1; k >= 0; k--) {
               var ev = parentTc.subAgentEvents[k];
@@ -1118,17 +1145,27 @@ function setupEvents() {
           }
         }
       }
+      // 非 generating 对话跳过 DOM 更新
+      if (!isGenConv) return;
+
+      var tcObj = { result: data.result, status: data.error ? 'error' : 'done' };
+      updateToolCallIncremental(data.id, tcObj);
       return;
     }
 
-    var conv = state.currentConversation;
-    if (!conv) return;
-    var lastMsg = conv.messages[conv.messages.length - 1];
-    if (!lastMsg || lastMsg.role !== 'assistant' || !lastMsg.toolCalls) return;
-    var tc = lastMsg.toolCalls.find(function(t) { return t.id === data.id; });
+    // 更新 generating 对话的数据模型
+    var genConv = state.conversations.find(function(c) { return c.id === state.generatingConversationId; });
+    if (!genConv) return;
+    var genLastMsg = genConv.messages[genConv.messages.length - 1];
+    if (!genLastMsg || genLastMsg.role !== 'assistant' || !genLastMsg.toolCalls) return;
+    var tc = genLastMsg.toolCalls.find(function(t) { return t.id === data.id; });
     if (!tc) return;
     tc.result = data.result;
     tc.status = data.error ? 'error' : 'done';
+
+    // 非 generating 对话跳过 DOM 更新
+    if (!isGenConv) return;
+
     if (!updateToolCallIncremental(data.id, tc)) renderMessages();
   });
 
@@ -1136,6 +1173,7 @@ function setupEvents() {
   window.api.on('agent-complete', function(data) {
     log('Agent loop 完成: ' + JSON.stringify(data.success));
     state.isGenerating = false;
+    state.generatingConversationId = null;
     state.currentLoopId = null;
     setThinking(false);
     clearStreamingMarks();
@@ -1372,6 +1410,12 @@ function selectConversation(id) {
   }
   // 切换对话时清空任务面板（任务是按对话维度的运行时状态，不应跨对话保留）
   window.api.invoke('clear-tasks').catch(function() {});
+  // 切换对话时根据是否当前对话在生成来更新发送/停止按钮
+  var isGen = state.isGenerating && state.generatingConversationId === state.currentConversation.id;
+  var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
+  if (sendBtn) sendBtn.style.display = isGen ? 'none' : 'flex';
+  if (stopBtn) stopBtn.style.display = isGen ? 'flex' : 'none';
+  setThinking(isGen);
   renderConversations();
   renderMessages();
 }
@@ -1462,9 +1506,10 @@ function renderConversations() {
   for (var i = 0; i < sorted.length; i++) {
     var c = sorted[i];
     var isActive = state.currentConversation && state.currentConversation.id === c.id;
-    html += '<div class="conversation-item' + (isActive ? ' active' : '') + (c.pinned ? ' pinned' : '') + '" data-id="' + c.id + '" title="右键查看更多操作">' +
+    html += '<div class="conversation-item' + (isActive ? ' active' : '') + (c.pinned ? ' pinned' : '') + (state.generatingConversationId === c.id ? ' generating' : '') + '" data-id="' + c.id + '" title="右键查看更多操作">' +
       (c.pinned ? '<span class="pin-icon">📌</span>' : '') +
       '<span class="title">' + esc(c.title) + '</span>' +
+      (state.generatingConversationId === c.id ? '<span class="generating-dots"><span></span><span></span><span></span></span>' : '') +
       '<button class="del" data-del="' + c.id + '" title="删除">✕</button></div>';
   }
   list.innerHTML = html;
@@ -1920,7 +1965,7 @@ function renderMessages() {
   });
   messagesEl.querySelectorAll('.regen-btn').forEach(function(btn) {
     btn.onclick = function() {
-      if (state.isGenerating) return;
+      if (state.isGenerating && state.generatingConversationId === state.currentConversation.id) return;
       var idx = parseInt(this.getAttribute('data-idx'));
       state.currentConversation.messages.splice(idx);
       saveConversations(); renderMessages(); generateResponse();
@@ -1928,7 +1973,7 @@ function renderMessages() {
   });
   messagesEl.querySelectorAll('.retry-btn').forEach(function(btn) {
     btn.onclick = function() {
-      if (state.isGenerating) return;
+      if (state.isGenerating && state.generatingConversationId === state.currentConversation.id) return;
       var idx = parseInt(this.getAttribute('data-idx'));
       // 删除失败的 assistant 消息后重新生成
       state.currentConversation.messages.splice(idx);
@@ -2237,7 +2282,7 @@ async function sendMessage() {
 
   var content = input.value.trim();
   if (!content && (!state.attachedFiles || state.attachedFiles.length === 0)) return;
-  if (state.isGenerating) return;
+  if (state.isGenerating && state.generatingConversationId === state.currentConversation.id) return;
 
   // 等附件全部落盘拿到本地路径再发送——否则 message.attachments[i].path 还是空，
   // 模型只看到 base64 图、没路径，就会用 dir/copy/test -f 去瞎找。
@@ -2288,6 +2333,7 @@ async function sendMessage() {
 // AI 生成（使用 Agent Loop）
 async function generateResponse() {
   state.isGenerating = true;
+  state.generatingConversationId = state.currentConversation.id;
   setThinking(true, '思考中...');
   var sendBtn = $('sendBtn');
   var stopBtn = $('stopBtn');
@@ -2328,17 +2374,19 @@ async function generateResponse() {
     if (modelConfig.apiKey) apiOptions.apiKey = modelConfig.apiKey;
     if (modelConfig.maxTokens) apiOptions.maxTokens = modelConfig.maxTokens;
     if (modelConfig.temperature != null) apiOptions.temperature = modelConfig.temperature;
+    if (modelConfig.reasoningEffort && modelConfig.reasoningEffort !== 'off') apiOptions.reasoningEffort = modelConfig.reasoningEffort;
     apiOptions.model = modelConfig.id;
   }
 
   try {
-        log('[send] apiOptions: model="' + apiOptions.model + '" temp="' + apiOptions.temperature + '" endpoint="' + (apiOptions.endpoint || 'default') + '"');
+        log('[send] apiOptions: model="' + apiOptions.model + '" temp="' + apiOptions.temperature + '" effort="' + (apiOptions.reasoningEffort || 'off') + '" endpoint="' + (apiOptions.endpoint || 'default') + '"');
 // 启动 agent loop（异步，通过 IPC 事件接收结果）
     window.api.invoke('agent-start', apiOptions).then(function(result) {
       log('Agent loop 返回: ' + JSON.stringify(result.success));
     }).catch(function(err) {
       logError('Agent loop 失败: ' + err.message);
       state.isGenerating = false;
+      state.generatingConversationId = null;
       setThinking(false);
       clearStreamingMarks();
       var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
@@ -2348,6 +2396,7 @@ async function generateResponse() {
   } catch (err) {
     assistantMsg.content = '错误: ' + err.message;
     state.isGenerating = false;
+    state.generatingConversationId = null;
     setThinking(false);
     clearStreamingMarks();
     var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
@@ -2365,6 +2414,7 @@ function stopGeneration() {
     state.currentLoopId = null;
   }
   state.isGenerating = false;
+  state.generatingConversationId = null;
   setThinking(false);
   var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
   if (sendBtn) sendBtn.style.display = 'flex';
@@ -3733,16 +3783,19 @@ function clearStreamingMarks() {
 
 // ========== 思考状态指示 ==========
 
-function setThinking(state, label) {
+function setThinking(active, label) {
   var el = $('thinkingIndicator');
   var lbl = $('thinkingLabel');
   if (!el) return;
-  if (state) {
+  // 仅当当前对话正是生成中的那个对话时才显示思考指示器
+  if (active && state.generatingConversationId === state.currentConversation.id) {
     el.style.display = 'flex';
     if (lbl) lbl.textContent = label || '思考中...';
   } else {
     el.style.display = 'none';
   }
+  // 刷新侧边栏对话列表，更新生成中的动画指示器
+  renderConversations();
 }
 
 // ========== 滚动到底部按钮 ==========
@@ -4011,8 +4064,14 @@ function renderSettingsTab(tab) {
       '<div style="font-size:14px;font-weight:600;margin-bottom:12px">' + t('addModel') + '</div>' +
       '<div class="form-group"><label>' + t('modelName') + '</label><input id="customModelName" placeholder="例如: MiniMax" /></div>' +
       '<div class="form-row"><div class="form-group"><label>' + t('modelId') + '</label><input id="customModelId" placeholder="例如: MiniMax-M2.7" /></div>' +
-      '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="customModelEndpoint" placeholder="例如: https://api.minimaxi.com/anthropic" /></div>' +
-      '<div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="customModelMaxTokens" placeholder="默认 ' + (state.config.maxTokens || 8192) + '" /></div></div>' +
+      '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="customModelEndpoint" placeholder="例如: https://api.minimaxi.com/anthropic" /></div></div>' +
+      '<div class="form-row"><div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="customModelMaxTokens" placeholder="默认 ' + (state.config.maxTokens || 8192) + '" /></div>' +
+      '<div class="form-group"><label>' + t('reasoningEffort') + '</label><select id="customModelReasoningEffort" style="width:100%;padding:6px;border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border)">' +
+        '<option value="off">' + t('effortOff') + '</option>' +
+        '<option value="low">' + t('effortLow') + '</option>' +
+        '<option value="medium">' + t('effortMedium') + '</option>' +
+        '<option value="high">' + t('effortHigh') + '</option>' +
+      '</select></div></div>' +
       '<div class="form-group"><label>' + t('temperature') + '</label><input type="range" id="customModelTemperature" min="0" max="2" step="0.05" value="' + (state.config.temperature ?? 0.7) + '" style="width:120px;vertical-align:middle" />' +
       ' <span id="customModelTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (state.config.temperature ?? 0.7) + '</span></div>' +
       '<div class="form-group"><label>' + t('apiKeyModel') + '</label><input type="password" id="customModelApiKey" placeholder="' + t('modelPlaceholderKey') + '" /></div>' +
@@ -4048,8 +4107,9 @@ function renderSettingsTab(tab) {
         var apiKey = $('customModelApiKey').value.trim();
         var modelMaxTokens = parseInt($('customModelMaxTokens').value) || undefined;
         var modelTemperature = parseFloat($('customModelTemperature').value);
+        var modelReasoningEffort = $('customModelReasoningEffort') ? $('customModelReasoningEffort').value : 'off';
         if (!name || !id) { showToast(t('fillNameId')); return; }
-        await window.api.invoke('add-model', { provider: 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: modelMaxTokens, temperature: modelTemperature });
+        await window.api.invoke('add-model', { provider: 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: modelMaxTokens, temperature: modelTemperature, reasoningEffort: modelReasoningEffort });
         state.config.models = await window.api.invoke('get-models');
         rebuildModelList();
         renderModelSelect(); renderModelList();
@@ -4409,6 +4469,7 @@ function renderModelList() {
         '<div class="model-card-detail">' + t('apiEndpoint') + ': ' + esc(m.endpoint || t('endpointDefault')) + '</div>' +
         '<div class="model-card-detail">' + t('apiKeyModel') + ': ' + (m.apiKey ? t('keySet') : '<span style="color:var(--accent-red)">' + t('keyNotSet') + '</span>') + '</div>' +
         (m.temperature != null ? '<div class="model-card-detail">Temp: ' + m.temperature + '</div>' : '') +
+        (m.reasoningEffort && m.reasoningEffort !== 'off' ? '<div class="model-card-detail">' + t('reasoningEffort') + ': ' + t('effort' + m.reasoningEffort.charAt(0).toUpperCase() + m.reasoningEffort.slice(1)) + '</div>' : '') +
       '</div>' +
       '<div class="model-card-actions">' +
         '<button class="btn-sm" data-edit="' + i + '">' + t('editModel') + '</button>' +
@@ -4441,7 +4502,7 @@ function rebuildModelList() {
   if (state.config.models) {
     for (var i = 0; i < state.config.models.length; i++) {
       var m = state.config.models[i];
-      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider, maxTokens: m.maxTokens, temperature: m.temperature });
+      state.models.push({ name: m.name, id: m.id, endpoint: m.endpoint, apiKey: m.apiKey, provider: m.provider, maxTokens: m.maxTokens, temperature: m.temperature, reasoningEffort: m.reasoningEffort || 'off' });
     }
   }
 }
@@ -4461,8 +4522,14 @@ function openEditModelModal(idx) {
       '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="editModelEndpoint" value="' + esc(m.endpoint || '') + '" placeholder="https://api.example.com" /></div>' +
       '<div class="form-group"><label>' + t('apiKeyModel') + '</label><input type="password" id="editModelApiKey" value="' + esc(m.apiKey || '') + '" /></div>' +
       '<div class="form-row"><div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="editModelMaxTokens" value="' + (m.maxTokens || '') + '" placeholder="默认" /></div>' +
+      '<div class="form-group"><label>' + t('reasoningEffort') + '</label><select id="editModelReasoningEffort" style="width:100%;padding:6px;border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border)">' +
+        '<option value="off"' + (m.reasoningEffort === 'off' || !m.reasoningEffort ? ' selected' : '') + '>' + t('effortOff') + '</option>' +
+        '<option value="low"' + (m.reasoningEffort === 'low' ? ' selected' : '') + '>' + t('effortLow') + '</option>' +
+        '<option value="medium"' + (m.reasoningEffort === 'medium' ? ' selected' : '') + '>' + t('effortMedium') + '</option>' +
+        '<option value="high"' + (m.reasoningEffort === 'high' ? ' selected' : '') + '>' + t('effortHigh') + '</option>' +
+      '</select></div></div>' +
       '<div class="form-group"><label>' + t('temperature') + '</label><input type="range" id="editModelTemperature" min="0" max="2" step="0.05" value="' + (m.temperature ?? state.config.temperature ?? 0.7) + '" style="width:120px;vertical-align:middle" />' +
-      ' <span id="editModelTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (m.temperature ?? state.config.temperature ?? 0.7) + '</span></div></div>' +
+      ' <span id="editModelTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (m.temperature ?? state.config.temperature ?? 0.7) + '</span></div>' +
       '<div class="modal-actions">' +
         '<button class="btn-secondary edit-cancel-btn">取消</button>' +
         '<button class="btn-primary edit-save-btn">' + t('saveConfig') + '</button>' +
@@ -4485,8 +4552,9 @@ function openEditModelModal(idx) {
 
     var editMaxTokens = parseInt($('editModelMaxTokens').value) || undefined;
     var editTemperature = parseFloat($('editModelTemperature').value);
+    var editReasoningEffort = $('editModelReasoningEffort') ? $('editModelReasoningEffort').value : 'off';
     var models = state.config.models.slice();
-    models[idx] = { provider: models[idx].provider || 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: editMaxTokens, temperature: editTemperature };
+    models[idx] = { provider: models[idx].provider || 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: editMaxTokens, temperature: editTemperature, reasoningEffort: editReasoningEffort };
     await window.api.invoke('set-config', 'models', models);
     state.config.models = models;
     rebuildModelList();
