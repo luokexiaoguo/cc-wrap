@@ -37,6 +37,8 @@ var I18N = {
     clearAllCache: '清理所有缓存', clearConfirm: '确定要清理吗？此操作不可撤销。',
     exportSuccess: '对话已导出为 Markdown 文件', exportClipboard: '导出失败，已复制到剪贴板',
     autoSave: '自动保存', autoSaveDesc: '编辑文件时自动保存（每 5 秒）',
+    tokenStats: 'Token 统计', today: '今天', yesterday: '昨天', last30d: '近 30 天',
+    sessions: '会话数', totalTokens: 'Token 总量',
     about: '关于', appVersion: '版本', appDescription: 'cc-wrap 是一个基于 Electron 的 Claude Code 桌面前端，支持多模型、MCP 工具扩展、Skills 注入、记忆系统等功能。',
     githubRepo: 'GitHub 仓库',
   },
@@ -71,6 +73,8 @@ var I18N = {
     clearAllCache: 'Clear All Cache', clearConfirm: 'Are you sure? This action cannot be undone.',
     exportSuccess: 'Conversation exported as Markdown', exportClipboard: 'Export failed, copied to clipboard',
     autoSave: 'Auto Save', autoSaveDesc: 'Auto-save edited files (every 5s)',
+    tokenStats: 'Token Stats', today: 'Today', yesterday: 'Yesterday', last30d: 'Last 30 Days',
+    sessions: 'Sessions', totalTokens: 'Total Tokens',
     about: 'About', appVersion: 'Version', appDescription: 'cc-wrap is an Electron desktop frontend for Claude Code, supporting multiple models, MCP tools, Skills, and memory system.',
     githubRepo: 'GitHub Repository',
   }
@@ -107,6 +111,7 @@ function applyLanguage() {
     else if (tab === 'theme') btn.textContent = t('themeSettings');
     else if (tab === 'general') btn.textContent = t('generalSettings');
     else if (tab === 'logs') btn.textContent = t('logs');
+    else if (tab === 'tokens') btn.textContent = t('tokenStats');
     else if (tab === 'about') btn.textContent = t('about');
   });
   // 文件面板按钮
@@ -1460,9 +1465,6 @@ function renderConversations() {
     html += '<div class="conversation-item' + (isActive ? ' active' : '') + (c.pinned ? ' pinned' : '') + '" data-id="' + c.id + '" title="右键查看更多操作">' +
       (c.pinned ? '<span class="pin-icon">📌</span>' : '') +
       '<span class="title">' + esc(c.title) + '</span>' +
-      ((c.totalInputTokens !== undefined || c.totalOutputTokens !== undefined)
-        ? '<span class="conv-tokens">↑' + (c.totalInputTokens ?? 0) + ' ↓' + (c.totalOutputTokens ?? 0) + '</span>'
-        : '') +
       '<button class="del" data-del="' + c.id + '" title="删除">✕</button></div>';
   }
   list.innerHTML = html;
@@ -4228,6 +4230,124 @@ function renderSettingsTab(tab) {
         clearTimeout(searchTimer);
         searchTimer = setTimeout(function() { loadLogs(searchInput.value); }, 300);
       };
+    }
+  } else if (tab === 'tokens') {
+    function _fmtTok(n) {
+      if (!n || n === 0) return '0';
+      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+      return String(n);
+    }
+    function computeTokenStats() {
+      var dayMap = {};
+      state.conversations.forEach(function(c) {
+        var hasMsgData = false;
+        c.messages.forEach(function(m) {
+          if (!m.timestamp) return;
+          if (!m.inputTokens && !m.outputTokens) return;
+          var day = m.timestamp.slice(0, 10);
+          if (!dayMap[day]) dayMap[day] = { tokens: 0, convSet: {} };
+          dayMap[day].tokens += (m.inputTokens || 0) + (m.outputTokens || 0);
+          dayMap[day].convSet[c.id] = true;
+          hasMsgData = true;
+        });
+        if (!hasMsgData && c.createdAt && (c.totalInputTokens || c.totalOutputTokens)) {
+          var day = c.createdAt.slice(0, 10);
+          if (!dayMap[day]) dayMap[day] = { tokens: 0, convSet: {} };
+          dayMap[day].tokens += (c.totalInputTokens || 0) + (c.totalOutputTokens || 0);
+          dayMap[day].convSet[c.id] = true;
+        }
+      });
+      Object.keys(dayMap).forEach(function(d) {
+        dayMap[d].convCount = Object.keys(dayMap[d].convSet).length;
+        delete dayMap[d].convSet;
+      });
+      return dayMap;
+    }
+    var stats = computeTokenStats();
+    var today = new Date();
+    var todayStr = today.toISOString().slice(0, 10);
+    var yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+    var yesterdayStr = yesterday.toISOString().slice(0, 10);
+    var d30 = new Date(today); d30.setDate(d30.getDate() - 30);
+    var d30Str = d30.toISOString().slice(0, 10);
+    function di(dayStr) {
+      var d = stats[dayStr];
+      return { tokens: d ? d.tokens : 0, convs: d ? d.convCount : 0 };
+    }
+    var ti = di(todayStr), yi = di(yesterdayStr);
+    var l30t = 0, l30c = 0;
+    Object.keys(stats).forEach(function(d) {
+      if (d >= d30Str) { l30t += stats[d].tokens; l30c += stats[d].convCount; }
+    });
+    var html = '<div class="token-summary-row">' +
+      '<div class="token-summary-card"><div class="tsc-label">' + t('today') + '</div><div class="tsc-value">' + _fmtTok(ti.tokens) + '</div><div class="tsc-sub">' + ti.convs + ' ' + t('sessions') + '</div></div>' +
+      '<div class="token-summary-card"><div class="tsc-label">' + t('yesterday') + '</div><div class="tsc-value">' + _fmtTok(yi.tokens) + '</div><div class="tsc-sub">' + yi.convs + ' ' + t('sessions') + '</div></div>' +
+      '<div class="token-summary-card"><div class="tsc-label">' + t('last30d') + '</div><div class="tsc-value">' + _fmtTok(l30t) + '</div><div class="tsc-sub">' + l30c + ' ' + t('sessions') + '</div></div>' +
+      '</div>';
+    var hasData = Object.keys(stats).length > 0;
+    if (!hasData) {
+      html += '<div style="text-align:center;padding:60px 20px;color:var(--text-secondary);font-size:13px">暂无 token 统计</div>';
+      content.innerHTML = html;
+    } else {
+      var endDate = new Date(today);
+      var startDate = new Date(today);
+      startDate.setFullYear(startDate.getFullYear() - 1);
+      startDate.setDate(startDate.getDate() - startDate.getDay());
+      var weeks = [];
+      var cursor = new Date(startDate);
+      while (cursor <= endDate) {
+        var week = [];
+        for (var i = 0; i < 7; i++) {
+          var d = new Date(cursor);
+          d.setDate(d.getDate() + i);
+          var ds = d.toISOString().slice(0, 10);
+          week.push({ date: d, dayStr: ds, data: stats[ds] || null });
+        }
+        weeks.push(week);
+        cursor.setDate(cursor.getDate() + 7);
+      }
+      var maxTokens = 1;
+      Object.keys(stats).forEach(function(d) { if (stats[d].tokens > maxTokens) maxTokens = stats[d].tokens; });
+      var lang = (state.config && state.config.language) || 'zh';
+      var dayLabels = lang === 'zh' ? ['日','一','二','三','四','五','六'] : ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      var monthLabels = [];
+      for (var w = 0; w < weeks.length; w++) {
+        var fd = weeks[w][0].date;
+        var m = fd.getMonth(), y = fd.getFullYear();
+        monthLabels.push((w === 0 || weeks[w-1][0].date.getMonth() !== m) ? (y + '/' + (m + 1)) : '');
+      }
+      function getLevel(tokens) {
+        if (!tokens || tokens === 0) return 0;
+        var r = tokens / maxTokens;
+        if (r <= 0.1) return 1; if (r <= 0.25) return 2; if (r <= 0.5) return 3; if (r <= 0.75) return 4;
+        return 5;
+      }
+      html += '<div class="heatmap-wrapper">';
+      html += '<div class="heatmap-month-row"><span class="heatmap-spacer"></span>';
+      for (var w = 0; w < weeks.length; w++) {
+        html += '<span class="heatmap-month-label">' + esc(monthLabels[w]) + '</span>';
+      }
+      html += '</div>';
+      for (var row = 0; row < 7; row++) {
+        html += '<div class="heatmap-row">';
+        html += '<span class="heatmap-day-label">' + dayLabels[row] + '</span>';
+        for (var w = 0; w < weeks.length; w++) {
+          var cell = weeks[w][row];
+          var level = getLevel(cell.data ? cell.data.tokens : 0);
+          var tokenStr = cell.data ? _fmtTok(cell.data.tokens) : '0';
+          var convStr = cell.data ? cell.data.convCount : '0';
+          html += '<span class="heatmap-cell lv' + level + '" title="' + cell.dayStr + '\n' + tokenStr + ' tokens\n' + convStr + ' ' + t('sessions') + '"></span>';
+        }
+        html += '</div>';
+      }
+      html += '<div class="heatmap-legend-row">' +
+        '<span style="font-size:11px;color:var(--text-secondary);margin-right:6px">' + t('totalTokens') + '</span>' +
+        '<span class="heatmap-cell lv0"></span><span class="heatmap-cell lv1"></span>' +
+        '<span class="heatmap-cell lv2"></span><span class="heatmap-cell lv3"></span>' +
+        '<span class="heatmap-cell lv4"></span><span class="heatmap-cell lv5"></span></div>';
+      html += '</div>';
+      content.innerHTML = html;
     }
   } else if (tab === 'about') {
     (async function() {
