@@ -92,12 +92,13 @@ button, input, textarea, select {
 }
 .titlebar-btn {
   width: 46px; height: 38px; border: none; background: transparent;
-  color: var(--text-secondary); cursor: pointer; font-size: 12px;
+  color: var(--text-secondary); cursor: pointer; font-size: 15px; line-height: 1; padding: 0;
   display: flex; align-items: center; justify-content: center;
   transition: background 0.15s, color 0.15s;
 }
 .titlebar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .titlebar-close:hover { background: var(--accent-red); color: #fff; }
+#btnMaximize { font-size: 13px; transform: translateY(-1px); }
 
 body.light-theme .titlebar { background: var(--bg-secondary); }
 body.light-theme .titlebar-drag { color: var(--text-primary); }
