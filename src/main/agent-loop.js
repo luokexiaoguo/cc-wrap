@@ -151,15 +151,13 @@ async function runAgentLoop(mainWindow, options) {
       round++;
       console.log(`[Agent Loop] 第 ${round} 轮`);
 
-      // 检查上下文窗口，超过150K tokens时自动压缩
+      // 检查上下文窗口，超过80K tokens时渐进式压缩
       const estimatedTokens = estimateTokens(currentMessages);
-      if (estimatedTokens > 150000) {
+      if (estimatedTokens > 80000) {
         console.log(`[Agent Loop] 上下文过长 (${estimatedTokens} tokens)，自动压缩...`);
-        sendToRenderer(mainWindow, 'agent-stream-text', {
-          text: '\n\n[上下文过长，正在压缩对话历史...]\n\n',
-          round
-        });
-        currentMessages = await compactMessages(mainWindow, currentMessages, config);
+        sendToRenderer(mainWindow, 'agent-compressing', { compressing: true });
+        currentMessages = await compactMessages(mainWindow, currentMessages, config, estimatedTokens);
+        sendToRenderer(mainWindow, 'agent-compressing', { compressing: false });
       }
 
       // 收集流式响应
@@ -214,10 +212,9 @@ async function runAgentLoop(mainWindow, options) {
                 totalUsage.input_tokens += u.input_tokens || 0;
                 totalUsage.output_tokens += u.output_tokens || 0;
               } else {
-                const estIn = Math.ceil(countChars(currentMessages) / 4);
-                const estOut = Math.ceil(fullText.length / 4);
-                totalUsage.input_tokens += estIn;
-                totalUsage.output_tokens += estOut;
+                totalUsage.input_tokens += estimateTokens(currentMessages);
+                const chineseOut = (fullText.match(/[一-鿿㐀-䶿豈-﫿]/g) || []).length;
+                totalUsage.output_tokens += Math.ceil(chineseOut * 1.5 + (fullText.length - chineseOut) / 4);
               }
             }
           }
@@ -398,24 +395,6 @@ function _toolFamily(name, input) {
 }
 
 /**
- * 统计消息数组的总字符数（用于 token 估算）
- */
-function countChars(messages) {
-  let total = 0;
-  for (const msg of messages) {
-    if (typeof msg.content === 'string') total += msg.content.length;
-    else if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === 'text') total += (block.text || '').length;
-        else if (block.type === 'tool_result') total += (block.content || '').length;
-        else if (block.type === 'tool_use') total += JSON.stringify(block.input || '').length;
-      }
-    }
-  }
-  return total;
-}
-
-/**
  * 检测是否"卡住"了：连续 N 轮相同类型的工具调用全部失败
  */
 function _checkStuck(consecutiveFails, familyRounds, currentFamily) {
@@ -424,51 +403,77 @@ function _checkStuck(consecutiveFails, familyRounds, currentFamily) {
 }
 
 /**
- * 估算消息的 token 数量（粗略估算：1个token≈4个字符）
+ * 估算消息的 token 数量（中文字符 ~1.5 token/字，英文 ~0.25 token/字符）
  */
 function estimateTokens(messages) {
   let totalChars = 0;
+  let chineseChars = 0;
   for (const msg of messages) {
+    let text = '';
     if (typeof msg.content === 'string') {
-      totalChars += msg.content.length;
+      text = msg.content;
     } else if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
-        if (block.type === 'text') totalChars += block.text.length;
-        else if (block.type === 'tool_result') totalChars += (block.content || '').length;
-        else if (block.type === 'tool_use') totalChars += JSON.stringify(block.input).length;
+        if (block.type === 'text') text += block.text;
+        else if (block.type === 'tool_result') text += (block.content || '');
+        else if (block.type === 'tool_use') text += JSON.stringify(block.input);
       }
     }
+    totalChars += text.length;
+    chineseChars += (text.match(/[一-鿿㐀-䶿豈-﫿]/g) || []).length;
   }
-  return Math.ceil(totalChars / 4);
+  // 中文字符约 1.5 token/字，英文约 0.25 token/字符（4 字符/token）
+  const nonChinese = totalChars - chineseChars;
+  return Math.ceil(chineseChars * 1.5 + nonChinese / 4);
 }
 
 /**
  * 压缩消息历史以适应上下文窗口
  */
-async function compactMessages(mainWindow, messages, config) {
+async function compactMessages(mainWindow, messages, config, estimatedTokens) {
   if (messages.length < 4) return messages;
 
-  // 保留最后2条消息，压缩前面的消息
-  const recentMsgs = messages.slice(-2);
-  const msgsToSummarize = messages.slice(0, -2);
+  // 根据上下文压力决定保留多少条最近消息
+  // 80K-100K: 保留8条，100K-120K: 保留6条，120K-150K: 保留4条，150K+: 保留2条
+  let keepCount = 2;
+  if (estimatedTokens) {
+    if (estimatedTokens < 100000) keepCount = 8;
+    else if (estimatedTokens < 120000) keepCount = 6;
+    else if (estimatedTokens < 150000) keepCount = 4;
+  }
+  keepCount = Math.min(keepCount, Math.max(0, messages.length - 2));
 
-  // 构建摘要请求
+  const recentMsgs = messages.slice(-keepCount);
+  const msgsToSummarize = messages.slice(0, -keepCount);
+
+  // 构建摘要请求：传递更完整的内容让摘要更精确
+  const MAX_PER_MSG = 2000;
   const summaryContent = msgsToSummarize.map(m => {
     const role = m.role === 'user' ? '用户' : '助手';
     let content = '';
     if (typeof m.content === 'string') {
-      content = m.content.substring(0, 300);
+      content = m.content;
     } else if (Array.isArray(m.content)) {
       for (const block of m.content) {
-        if (block.type === 'text') content += block.text.substring(0, 300);
-        else if (block.type === 'tool_use') content += `[调用工具: ${block.name}]`;
-        else if (block.type === 'tool_result') content += `[工具结果: ${(block.content || '').substring(0, 100)}]`;
+        if (block.type === 'text') content += block.text;
+        else if (block.type === 'tool_use') {
+          content += `[工具调用: ${block.name}`;
+          if (block.input) content += ` | 参数: ${JSON.stringify(block.input).substring(0, 500)}`;
+          content += ']';
+        }
+        else if (block.type === 'tool_result') {
+          const resultStr = typeof block.content === 'string' ? block.content : JSON.stringify(block.content || '');
+          content += `[工具结果: ${resultStr.substring(0, 500)}]`;
+        }
       }
     }
+    if (content.length > MAX_PER_MSG) {
+      content = content.substring(0, MAX_PER_MSG) + `\n... [省略 ${content.length - MAX_PER_MSG} 字符]`;
+    }
     return `${role}: ${content}`;
-  }).join('\n');
+  }).join('\n---\n');
 
-  const summarizePrompt = `请将以下对话压缩成简洁的摘要，保留关键信息。控制在300字以内。\n\n对话内容：\n${summaryContent}`;
+  const summarizePrompt = `请将以下对话压缩成简洁的摘要，保留关键信息（包括已执行的操作、用户要求、代码改动内容）。控制在300字以内。\n\n对话内容：\n${summaryContent}`;
 
   try {
     const { callAPI } = require('./api-client');
@@ -482,7 +487,7 @@ async function compactMessages(mainWindow, messages, config) {
     const summaryText = result.content?.[0]?.text || '对话摘要';
 
     return [
-      { role: 'user', content: '[对话已被压缩]' },
+      { role: 'user', content: `[${msgsToSummarize.length} 条早期对话已被压缩]` },
       { role: 'assistant', content: `对话摘要：\n${summaryText}` },
       ...recentMsgs
     ];
@@ -490,7 +495,7 @@ async function compactMessages(mainWindow, messages, config) {
     console.error('[Agent Loop] 压缩失败:', err.message);
     // 压缩失败时，简单截断旧消息
     return [
-      { role: 'user', content: '[早期对话已省略]' },
+      { role: 'user', content: `[早期 ${msgsToSummarize.length} 条对话已省略]` },
       ...recentMsgs
     ];
   }

@@ -35,7 +35,7 @@ const ON_CHANNELS = [
   'agent-complete', 'agent-permission-request',
   'auto-memories-extracted', 'mcp-status',
   'tasks-changed', 'skills-changed',
-  'agent-question',
+  'agent-question', 'agent-compressing',
   'tray-new-conversation', 'tray-open-settings',
   'terminal-output'
 ];

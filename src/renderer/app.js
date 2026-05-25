@@ -909,6 +909,24 @@ function setupEvents() {
     if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
   });
 
+  // 上下文压缩 loading 动画
+  window.api.on('agent-compressing', function(data) {
+    var messagesEl = $('messages');
+    if (!messagesEl) return;
+    var existing = messagesEl.querySelector('.compression-indicator');
+    if (data.compressing) {
+      if (existing) return;
+      var indicator = document.createElement('div');
+      indicator.className = 'compression-indicator';
+      indicator.innerHTML = '<span class="compression-dot"></span><span class="compression-dot"></span><span class="compression-dot"></span><span class="compression-label">正在压缩对话历史...</span>';
+      messagesEl.appendChild(indicator);
+      var chatArea = $('chatArea');
+      if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
+    } else {
+      if (existing) existing.remove();
+    }
+  });
+
   // 工具调用开始 — 增量插入 DOM，不全量重绘（修复授权弹窗卡顿的核心）
   window.api.on('agent-stream-tool-start', function(data) {
     // 子 Agent 工具调用 → 嵌套到父工具卡片的 subagent 容器内
