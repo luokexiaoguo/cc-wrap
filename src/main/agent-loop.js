@@ -15,6 +15,14 @@ const PERMISSION_REQUIRED_TOOLS = ['Write', 'Edit', 'Bash'];
 // 最大循环轮数
 const MAX_ROUNDS = 50;
 
+// 自动续推：模型停止出 tool_call 时的最大重试次数（大上下文模型需要更多次）
+function getMaxContinueRetries(model) {
+  if (!model) return 3;
+  const m = model.toLowerCase();
+  if (m.includes('minimax') || m.includes('m2.7')) return 6;
+  return 3;
+}
+
 // 活跃的 agent loop（用于取消）
 const activeLoops = new Map();
 
@@ -138,6 +146,14 @@ async function runAgentLoop(mainWindow, options) {
     let roundHistory = [];
     let stuckHintInjected = false;
 
+    // 自动续推：模型中途停止出 tool_call 时自动追加"继续"消息
+    let continueRetries = 0;
+    const CONTINUE_PROMPTS = [
+      '继续使用工具完成任务，不要停止。',
+      '任务尚未完成，请继续使用工具执行下一步。',
+      '请继续。如果你认为任务已完成，请总结结果。',
+    ];
+
     while (round < MAX_ROUNDS) {
       if (cancelToken.cancelled) {
         sendToRenderer(mainWindow, 'agent-complete', {
@@ -150,10 +166,11 @@ async function runAgentLoop(mainWindow, options) {
       round++;
       console.log(`[Agent Loop] 第 ${round} 轮`);
 
-      // 检查上下文窗口，超过80K tokens时渐进式压缩
+      // 检查上下文窗口，动态阈值压缩
       const estimatedTokens = estimateTokens(currentMessages);
-      if (estimatedTokens > 80000) {
-        console.log(`[Agent Loop] 上下文过长 (${estimatedTokens} tokens)，自动压缩...`);
+      const compressionThreshold = getCompressionThreshold(apiConfig.model);
+      if (estimatedTokens > compressionThreshold) {
+        console.log(`[Agent Loop] 上下文过长 (${estimatedTokens} tokens，阈值 ${compressionThreshold})，自动压缩...`);
         sendToRenderer(mainWindow, 'agent-compressing', { compressing: true });
         currentMessages = await compactMessages(mainWindow, currentMessages, config, estimatedTokens);
         sendToRenderer(mainWindow, 'agent-compressing', { compressing: false });
@@ -264,6 +281,17 @@ async function runAgentLoop(mainWindow, options) {
 
       // 如果没有工具调用或不是 tool_use 停止原因，结束循环
       if (toolCalls.length === 0 || stopReason !== 'tool_use') {
+        // 自动续推：如果之前有工具调用（任务未完成）且未超过重试上限，追加"继续"消息再跑一轮
+        const hadToolCalls = roundHistory.some(r => r.count > 0);
+        const maxContinue = getMaxContinueRetries(apiConfig.model);
+        if (hadToolCalls && continueRetries < maxContinue && roundHistory.length > 0 && !cancelToken.cancelled) {
+          continueRetries++;
+          const contPrompt = CONTINUE_PROMPTS[Math.min(continueRetries - 1, CONTINUE_PROMPTS.length - 1)];
+          console.log(`[Agent Loop] 自动续推 (${continueRetries}/${maxContinue}): ${contPrompt}`);
+          currentMessages.push({ role: 'user', content: contPrompt });
+          round++; // 续推算一轮，但不算在 roundHistory 里（不触发卡住检测）
+          continue;
+        }
         sendToRenderer(mainWindow, 'agent-complete', {
           success: true,
           messages: currentMessages,
@@ -426,90 +454,116 @@ function estimateTokens(messages) {
 }
 
 /**
+ * 根据模型确定压缩阈值
+ * 大上下文模型（如 MiniMax-M2.7 支持 1M）使用更高阈值，避免过早压缩
+ */
+function getCompressionThreshold(model) {
+  if (!model) return 80000;
+  const m = model.toLowerCase();
+  // 大上下文模型（>=1M context）
+  if (m.includes('minimax') || m.includes('m2.7') || m.includes('glm-4')) return 500000;
+  // 中上下文模型（>=200K context 如 gemini, deepseek)
+  if (m.includes('gemini') || m.includes('deepseek')) return 200000;
+  // Claude 系列
+  if (m.includes('claude')) return 120000;
+  // 默认保守阈值
+  return 80000;
+}
+
+/**
  * 压缩消息历史以适应上下文窗口
  */
 async function compactMessages(mainWindow, messages, config, estimatedTokens) {
-  if (messages.length < 4) return messages;
+  if (messages.length < 6) return messages;
 
   // 根据上下文压力决定保留多少条最近消息
-  // 80K-100K: 保留8条，100K-120K: 保留6条，120K-150K: 保留4条，150K+: 保留2条
-  let keepCount = 2;
+  let keepCount = Math.min(messages.length - 2, 16);
+  // 压力越大保留越少，但比之前宽松很多
   if (estimatedTokens) {
-    if (estimatedTokens < 100000) keepCount = 8;
-    else if (estimatedTokens < 120000) keepCount = 6;
-    else if (estimatedTokens < 150000) keepCount = 4;
+    if (estimatedTokens < 200000) keepCount = Math.min(keepCount, 16);
+    else if (estimatedTokens < 350000) keepCount = Math.min(keepCount, 12);
+    else if (estimatedTokens < 500000) keepCount = Math.min(keepCount, 8);
+    else keepCount = Math.min(keepCount, 6);
   }
-  keepCount = Math.min(keepCount, Math.max(0, messages.length - 2));
 
-  // 除了保留最近的 keepCount 条消息外，额外扫描并保留包含重要文字内容的助手消息
-  // 解决工具调用过多时 AI 之前输出的方案/编号被压缩丢失的问题
+  // 保留最近的 keepCount 条消息
   let recentMsgs = messages.slice(-keepCount);
-  const boundary = messages.length - keepCount;
 
-  // 从 boundary 往前找最近的 2 条包含实质文字内容的 assistant 消息
-  // 这条消息要么还没在 recentMsgs 里（被工具调用的 flood 挤出窗口了），
-  // 如果已经在 recentMsgs 里则跳过
-  const existingIndexes = new Set();
-  for (let j = 0; j < recentMsgs.length; j++) {
-    existingIndexes.add(messages.length - keepCount + j);
+  // 从更早的消息中找到包含实质文字内容的 assistant 回复（往前找最多 4 条）
+  // 这些通常是模型输出的方案、总结、分析，不能丢
+  const preservedSet = new Set();
+  for (let i = messages.length - keepCount; i < messages.length; i++) {
+    preservedSet.add(i);
   }
   let textAssistantAdded = 0;
-  for (let i = boundary - 1; i >= 0 && textAssistantAdded < 2; i--) {
-    if (existingIndexes.has(i)) continue;
+  for (let i = messages.length - keepCount - 1; i >= 0 && textAssistantAdded < 4; i--) {
     const m = messages[i];
     if (m.role !== 'assistant') continue;
     let text = '';
-    if (typeof m.content === 'string') {
-      text = m.content;
-    } else if (Array.isArray(m.content)) {
+    if (typeof m.content === 'string') text = m.content;
+    else if (Array.isArray(m.content)) {
       for (const block of m.content) {
         if (block.type === 'text' && block.text) text += block.text;
       }
     }
-    // 只有文字内容 > 50 字符才认为是"有实质内容的"（过滤纯工具调用消息）
-    if (text.length > 50) {
+    if (text.length > 80) {
       recentMsgs.unshift(m);
+      preservedSet.add(i);
       textAssistantAdded++;
     }
   }
 
-  // 计算哪些消息需要被压缩（排除已留在 recentMsgs 中的）
-  const preservedIndexes = new Set();
-  for (let j = messages.length - keepCount; j < messages.length; j++) preservedIndexes.add(j);
-  // 加上额外保留的 assistant 消息的位置
-  for (let i = 0; i < messages.length - keepCount; i++) {
-    if (recentMsgs.includes(messages[i])) preservedIndexes.add(i);
+  // 同样往前找最多 2 条用户消息（包含用户提出的要求/问题）
+  let userMsgAdded = 0;
+  for (let i = messages.length - keepCount - 1; i >= 0 && userMsgAdded < 2; i--) {
+    if (preservedSet.has(i)) continue;
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    let text = '';
+    if (typeof m.content === 'string') text = m.content;
+    else if (Array.isArray(m.content)) {
+      for (const block of m.content) {
+        if (block.type === 'text' && block.text) text += block.text;
+      }
+    }
+    if (text.length > 30) {
+      recentMsgs.unshift(m);
+      preservedSet.add(i);
+      userMsgAdded++;
+    }
   }
-  const msgsToSummarize = messages.filter((_, i) => !preservedIndexes.has(i));
 
-  // 构建摘要请求：传递更完整的内容让摘要更精确
-  const MAX_PER_MSG = 2000;
+  // 确定哪些消息需要被摘要
+  const msgsToSummarize = messages.filter((_, i) => !preservedSet.has(i));
+
+  // 如果被压缩的消息太少，不值得压缩
+  if (msgsToSummarize.length < 3) return messages;
+
+  // 构建摘要
+  const MAX_PER_MSG = 1500;
   const summaryContent = msgsToSummarize.map(m => {
     const role = m.role === 'user' ? '用户' : '助手';
     let content = '';
-    if (typeof m.content === 'string') {
-      content = m.content;
-    } else if (Array.isArray(m.content)) {
+    if (typeof m.content === 'string') content = m.content;
+    else if (Array.isArray(m.content)) {
       for (const block of m.content) {
         if (block.type === 'text') content += block.text;
         else if (block.type === 'tool_use') {
-          content += `[工具调用: ${block.name}`;
-          if (block.input) content += ` | 参数: ${JSON.stringify(block.input).substring(0, 500)}`;
+          content += `[工具: ${block.name}`;
+          if (block.input) content += ` ${JSON.stringify(block.input).substring(0, 300)}`;
           content += ']';
         }
         else if (block.type === 'tool_result') {
-          const resultStr = typeof block.content === 'string' ? block.content : JSON.stringify(block.content || '');
-          content += `[工具结果: ${resultStr.substring(0, 500)}]`;
+          const r = typeof block.content === 'string' ? block.content : JSON.stringify(block.content || '');
+          content += `[结果: ${r.substring(0, 300)}]`;
         }
       }
     }
-    if (content.length > MAX_PER_MSG) {
-      content = content.substring(0, MAX_PER_MSG) + `\n... [省略 ${content.length - MAX_PER_MSG} 字符]`;
-    }
+    if (content.length > MAX_PER_MSG) content = content.substring(0, MAX_PER_MSG) + `...[${content.length - MAX_PER_MSG}字符略]`;
     return `${role}: ${content}`;
   }).join('\n---\n');
 
-  const summarizePrompt = `请将以下对话压缩成简洁的摘要，保留关键信息（包括已执行的操作、用户要求、代码改动内容）。控制在300字以内。\n\n对话内容：\n${summaryContent}`;
+  const summarizePrompt = `压缩以下对话为摘要（300字内），保留：已执行的操作、用户的需求目标、做出的关键决策。\n\n${summaryContent}`;
 
   try {
     const { callAPI } = require('./api-client');
@@ -523,13 +577,12 @@ async function compactMessages(mainWindow, messages, config, estimatedTokens) {
     const summaryText = result.content?.[0]?.text || '对话摘要';
 
     return [
-      { role: 'user', content: `[${msgsToSummarize.length} 条早期对话已被压缩]` },
+      { role: 'user', content: `[${msgsToSummarize.length} 条早期对话已压缩]` },
       { role: 'assistant', content: `对话摘要：\n${summaryText}` },
       ...recentMsgs
     ];
   } catch (err) {
     console.error('[Agent Loop] 压缩失败:', err.message);
-    // 压缩失败时，简单截断旧消息
     return [
       { role: 'user', content: `[早期 ${msgsToSummarize.length} 条对话已省略]` },
       ...recentMsgs

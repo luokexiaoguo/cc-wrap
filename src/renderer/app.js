@@ -948,6 +948,12 @@ function setupEvents() {
     }
   });
 
+  // 文件系统变更 → 刷新文件树，并自动重载已打开的文件
+  window.api.on('file-tree-changed', function(data) {
+    refreshFileTree();
+    if (data && data.filePath) reloadChangedFile(data.filePath);
+  });
+
   // 工具调用开始 — 增量插入 DOM，不全量重绘（修复授权弹窗卡顿的核心）
   window.api.on('agent-stream-tool-start', function(data) {
     var isGenConv = state.generatingConversationId && state.generatingConversationId === state.currentConversation.id;
@@ -1216,6 +1222,7 @@ function setupEvents() {
     saveConversations();
     renderMessages();
     renderConversations();
+    refreshFileTree();
 
     // 兜底：agent loop 跑完后静默重拉一次 skills 列表
     // skills-changed IPC 万一漏发（ctx.window 没传、监听器没注册到等），靠这里捞回来
@@ -2993,6 +3000,13 @@ async function loadFileTree() {
       showContextMenu(e.clientX, e.clientY, fullPath, name, isDir);
     };
   });
+
+  // 文件树空白区域右键 → 在根目录新建/刷新
+  tree.oncontextmenu = function(e) {
+    if (e.target.closest('.file-item')) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, state.workDir, state.workDir.split(/[\\/]/).pop(), true);
+  };
 }
 
 // ========== 右键菜单 ==========
@@ -3004,12 +3018,16 @@ function showContextMenu(x, y, fullPath, name, isDir) {
   var menu = $('contextMenu');
   if (!menu) return;
 
+  var isRoot = fullPath === state.workDir;
+
   // 目录时不显示"打开"
   menu.querySelector('[data-action="open"]').style.display = isDir ? 'none' : '';
   // 新建文件/文件夹仅对目录显示（或在空白处，但这里默认使用当前目录）
   menu.querySelector('[data-action="newFile"]').style.display = isDir ? '' : 'none';
   menu.querySelector('[data-action="newFolder"]').style.display = isDir ? '' : 'none';
-  menu.querySelector('[data-action="rename"]').style.display = '';
+  // 根目录禁止重命名和删除（防止误操作）
+  menu.querySelector('[data-action="rename"]').style.display = isRoot ? 'none' : '';
+  menu.querySelector('[data-action="delete"]').style.display = isRoot ? 'none' : '';
 
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
@@ -4009,8 +4027,35 @@ function setupResizers() {
 
 // ========== 文件树自动刷新 ==========
 
+var _fileReloadTimer = null;
+
 function refreshFileTree() {
   if (state.workDir) loadFileTree();
+}
+
+// 文件变更时自动重载编辑器中的内容（500ms 防抖）
+function reloadChangedFile(filePath) {
+  if (!filePath || state.openFiles.length === 0) return;
+  if (_fileReloadTimer) clearTimeout(_fileReloadTimer);
+  _fileReloadTimer = setTimeout(function() {
+    _fileReloadTimer = null;
+    for (var i = 0; i < state.openFiles.length; i++) {
+      if (state.openFiles[i].path === filePath) {
+        (function(idx) {
+          // 用户已修改的文件不自动重载（避免覆盖未保存的改动）
+          if (state.openFiles[idx].modified) return;
+          window.api.invoke('tool-read', filePath).then(function(result) {
+            if (!result.success) return;
+            state.openFiles[idx].content = result.content;
+            state.openFiles[idx].originalContent = result.content;
+            state.openFiles[idx].modified = false;
+            if (state.activeFileIndex === idx) renderEditorContent();
+          });
+        })(i);
+        break;
+      }
+    }
+  }, 500);
 }
 
 // 主题

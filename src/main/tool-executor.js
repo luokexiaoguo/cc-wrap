@@ -73,8 +73,9 @@ function normalizeLineEndings(s) {
 // ==================== 文件操作工具 ====================
 
 function read(input, ctx) {
-  const filePath = resolvePath(input.file_path, ctx.workDir);
-  if (!input.file_path) return { error: 'file_path is required' };
+  const fp = input.file_path || input.filePath;
+  if (!fp) return { error: 'file_path is required' };
+  const filePath = resolvePath(fp, ctx.workDir);
 
   try {
     const stat = fs.statSync(filePath);
@@ -100,29 +101,32 @@ function read(input, ctx) {
 }
 
 function write(input, ctx) {
-  const { content } = input;
-  if (!input.file_path || content === undefined) return { error: 'file_path and content are required' };
-  const filePath = resolvePath(input.file_path, ctx.workDir);
+  const content = input.content;
+  const filePath = input.file_path || input.filePath;
+  if (!filePath || content === undefined) return { error: 'file_path and content are required' };
+  const resolved = resolvePath(filePath, ctx.workDir);
 
   try {
-    const dir = path.dirname(filePath);
+    const dir = path.dirname(resolved);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(filePath, content, 'utf-8');
-    return { content: `File written: ${filePath} (${content.length} chars)` };
+    fs.writeFileSync(resolved, content, 'utf-8');
+    return { content: `File written: ${resolved} (${content.length} chars)` };
   } catch (err) {
     return { error: err.message };
   }
 }
 
 function edit(input, ctx) {
-  const { old_string, new_string } = input;
-  if (!input.file_path || old_string === undefined || new_string === undefined) {
+  const filePath = input.file_path || input.filePath;
+  const old_string = input.old_string !== undefined ? input.old_string : input.oldString;
+  const new_string = input.new_string !== undefined ? input.new_string : input.newString;
+  if (!filePath || old_string === undefined || new_string === undefined) {
     return { error: 'file_path, old_string, and new_string are required' };
   }
-  const filePath = resolvePath(input.file_path, ctx.workDir);
+  const editPath = resolvePath(filePath, ctx.workDir);
 
   try {
-    const rawContent = readTextSmart(filePath);
+    const rawContent = readTextSmart(editPath);
     const hasCRLF = rawContent.includes('\r\n');
     // 在规范化的副本上匹配，消除 CRLF/LF 差异
     const normContent = normalizeLineEndings(rawContent);
@@ -136,8 +140,8 @@ function edit(input, ctx) {
     let newContent = normContent.replace(normOld, normNew);
     // 写回时保留原文件的行尾风格
     if (hasCRLF) newContent = newContent.replace(/\n/g, '\r\n');
-    fs.writeFileSync(filePath, newContent, 'utf-8');
-    return { content: `File edited: ${filePath}` };
+    fs.writeFileSync(editPath, newContent, 'utf-8');
+    return { content: `File edited: ${editPath}` };
   } catch (err) {
     return { error: err.message };
   }
@@ -190,7 +194,9 @@ function matchGlob(filePath, pattern) {
 }
 
 function grep(input, ctx) {
-  const { pattern, glob: globPattern, output_mode = 'content' } = input;
+  const pattern = input.pattern;
+  const globPattern = input.glob;
+  const output_mode = input.output_mode || input.outputMode || 'content';
   if (!pattern) return { error: 'pattern is required' };
 
   const target = resolvePath(input.path, ctx.workDir);
@@ -1503,7 +1509,11 @@ async function runSubAgent(input, ctx) {
 
 // Agent 工具主入口：路由到前台/后台/工作树执行
 async function agent(input, ctx) {
-  const { prompt, description, subagent_type = 'general-purpose', run_in_background = false, isolation } = input;
+  const prompt = input.prompt;
+  const description = input.description;
+  const subagent_type = input.subagent_type || input.subagentType || 'general-purpose';
+  const run_in_background = input.run_in_background !== undefined ? input.run_in_background : (input.runInBackground || false);
+  const isolation = input.isolation;
   if (!prompt) return { error: 'prompt is required' };
 
   // 1. Worktree 隔离
@@ -1619,4 +1629,4 @@ async function executeTool(toolName, input, context = {}) {
   return { error: `Unknown tool: ${toolName}` };
 }
 
-module.exports = { executeTool, taskStore, taskGetAll, taskClearAll, readTextSmart, setEnvConfig, clearBackgroundAgents };
+module.exports = { executeTool, taskStore, taskGetAll, taskClearAll, readTextSmart, setEnvConfig, clearBackgroundAgents, detectWinShell };

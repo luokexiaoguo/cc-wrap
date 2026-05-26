@@ -37,7 +37,8 @@ const ON_CHANNELS = [
   'tasks-changed', 'skills-changed',
   'agent-question', 'agent-compressing',
   'tray-new-conversation', 'tray-open-settings',
-  'terminal-output'
+  'terminal-output',
+  'file-tree-changed'
 ];
 
 const SEND_CHANNELS = [

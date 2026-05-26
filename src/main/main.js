@@ -1,3 +1,4 @@
+const { shouldUseAnthropicFormat } = require('./api-client');
 const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeImage, shell, Tray, Menu, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -87,6 +88,45 @@ setEnvConfig(store.get('env', {}));
 
 let mainWindow;
 const terminals = new Map(); // terminalId → node-pty process
+
+let fileWatcher = null;
+let fileWatchTimer = null;
+
+function startFileWatcher(dir) {
+  stopFileWatcher();
+  if (!dir || !fs.existsSync(dir)) return;
+  const notify = (filename) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const fullPath = filename ? path.resolve(dir, filename) : null;
+      mainWindow.webContents.send('file-tree-changed', { filePath: fullPath });
+    }
+  };
+  try {
+    fileWatcher = fs.watch(dir, { recursive: true }, (eventType, filename) => {
+      notify(filename);
+    });
+    console.log('[FileWatcher] 已启动监听:', dir);
+  } catch (_) {
+    try {
+      fileWatcher = fs.watch(dir, (eventType, filename) => {
+        notify(filename);
+      });
+      console.log('[FileWatcher] 已启动非递归监听:', dir);
+    } catch (e) {
+      console.warn('[FileWatcher] 监听失败:', dir, e.message);
+    }
+  }
+  if (fileWatcher) {
+    fileWatchTimer = setInterval(() => {
+      if (!fs.existsSync(dir)) stopFileWatcher();
+    }, 60000);
+  }
+}
+
+function stopFileWatcher() {
+  if (fileWatcher) { try { fileWatcher.close(); } catch (_) {} fileWatcher = null; }
+  if (fileWatchTimer) { clearInterval(fileWatchTimer); fileWatchTimer = null; }
+}
 
 // ========== 工具函数 ==========
 
@@ -343,6 +383,10 @@ app.whenReady().then(() => {
   createMainWindow();
   createTray();
 
+  // 启动文件系统监听（初始工作目录）
+  const initWorkDir = store.get('workDirectory');
+  if (initWorkDir) startFileWatcher(initWorkDir);
+
   // 配置相关（API key 字段在读出时解密、写入时加密）
   ipcMain.handle('get-config', () => {
     const raw = store.store;
@@ -363,6 +407,9 @@ app.whenReady().then(() => {
       store.set(key, value.map(m => ({ ...m, apiKey: m.apiKey ? encryptKey(m.apiKey) : '' })));
     } else {
       store.set(key, value);
+    }
+    if (key === 'workDirectory') {
+      startFileWatcher(value);
     }
     return true;
   });
@@ -423,39 +470,24 @@ app.whenReady().then(() => {
 
   // ========== Claude Code 工具：文件操作 ==========
 
-  // 读文件 + 自动识别编码（UTF-8 BOM / UTF-16 LE/BE / 严格 UTF-8 / GBK 兜底）
-  function readTextWithDetectedEncoding(filePath) {
-    const buf = fs.readFileSync(filePath);
-    // BOM 检测
-    if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
-      return { content: buf.slice(3).toString('utf-8'), encoding: 'utf-8-bom' };
-    }
-    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
-      return { content: iconv.decode(buf.slice(2), 'utf-16le'), encoding: 'utf-16le' };
-    }
-    if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
-      return { content: iconv.decode(buf.slice(2), 'utf-16be'), encoding: 'utf-16be' };
-    }
-    // 无 BOM：严格 UTF-8 验证
+  ipcMain.handle('tool-read', async (event, filePath) => {
     try {
-      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(buf);
-      return { content: decoded, encoding: 'utf-8' };
-    } catch (_) {
-      // 解码失败 → 试 GBK（中文 Windows ANSI）
-      try {
-        const gbk = iconv.decode(buf, 'gbk');
-        // 简单校验：GBK 解码不会抛错，但要剔除明显失败的情况
-        return { content: gbk, encoding: 'gbk' };
-      } catch (_) {
-        // 都不行 → latin1 兜底
-        return { content: buf.toString('latin1'), encoding: 'latin1' };
+      const buf = await fs.promises.readFile(filePath);
+      // BOM 检测
+      let content, encoding;
+      if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
+        content = buf.slice(3).toString('utf-8'); encoding = 'utf-8-bom';
+      } else if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+        content = iconv.decode(buf.slice(2), 'utf-16le'); encoding = 'utf-16le';
+      } else if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+        content = iconv.decode(buf.slice(2), 'utf-16be'); encoding = 'utf-16be';
+      } else {
+        try { content = new TextDecoder('utf-8', { fatal: true }).decode(buf); encoding = 'utf-8'; }
+        catch (_) {
+          try { content = iconv.decode(buf, 'gbk'); encoding = 'gbk'; }
+          catch (_) { content = buf.toString('latin1'); encoding = 'latin1'; }
+        }
       }
-    }
-  }
-
-  ipcMain.handle('tool-read', (event, filePath) => {
-    try {
-      const { content, encoding } = readTextWithDetectedEncoding(filePath);
       return { success: true, content, encoding };
     } catch (err) {
       return { success: false, error: err.message };
@@ -492,7 +524,8 @@ app.whenReady().then(() => {
 
   ipcMain.handle('tool-edit', (event, filePath, oldString, newString) => {
     try {
-      const { content } = readTextWithDetectedEncoding(filePath);
+      const { readTextSmart } = require('./tool-executor');
+      const content = readTextSmart(filePath);
       if (!content.includes(oldString)) {
         return { success: false, error: '未找到要替换的文本' };
       }
@@ -589,6 +622,7 @@ app.whenReady().then(() => {
   ipcMain.handle('set-work-dir', (event, dir) => {
     if (fs.existsSync(dir)) {
       store.set('workDirectory', dir);
+      startFileWatcher(dir);
       return true;
     }
     return false;
@@ -712,16 +746,6 @@ app.whenReady().then(() => {
   });
 
   // ========== API 调用 ==========
-
-  // 判断是否使用 Anthropic 格式：Claude 模型或 Anthropic 官方端点
-  function shouldUseAnthropicFormat(endpoint, model) {
-    // Claude 模型始终用 Anthropic 格式
-    if (/^claude-/i.test(model)) return true;
-    // Anthropic 官方端点
-    if (/anthropic\.com/i.test(endpoint)) return true;
-    // 其他第三方模型用 OpenAI 格式（流式兼容性更好）
-    return false;
-  }
 
   // 将 Anthropic 格式消息转为 OpenAI 格式
   function toOpenAIMessages(messages, system) {
@@ -1073,9 +1097,10 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('execute-tool', async (event, toolName, input) => {
-    const { executeTool } = require('./tool-executor');
+    const { executeTool, detectWinShell } = require('./tool-executor');
     const workDir = store.get('workDirectory');
-    const result = await executeTool(toolName, input, { window: mainWindow, workDir });
+    const shell = process.platform === 'win32' ? (detectWinShell() || process.env.COMSPEC) : '/bin/sh';
+    const result = await executeTool(toolName, input, { window: mainWindow, workDir, shell });
     if (result.error) {
       return { success: false, error: result.error };
     }
@@ -1378,15 +1403,31 @@ ${conversationText}
     }
   });
 
-  ipcMain.handle('save-conversations', (event, conversations) => {
+  // 原子写入 + EPERM 重试（Windows Defender 可能锁文件）
+  async function atomicWrite(tmpPath, finalPath, data, maxRetries = 3) {
+    fs.writeFileSync(tmpPath, data);
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        fs.renameSync(tmpPath, finalPath);
+        return;
+      } catch (err) {
+        if (attempt < maxRetries - 1 && err.code === 'EPERM') {
+          // Windows 上 AV 扫描可能短暂锁文件，等 200ms 重试
+          await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  ipcMain.handle('save-conversations', async (event, conversations) => {
     try {
       const userDataDir = app.getPath('userData');
       fs.mkdirSync(userDataDir, { recursive: true });
-      // 原子写：先写临时文件再 rename，避免写入过程中应用崩溃导致文件损坏
       const finalPath = conversationsPath();
       const tmpPath = finalPath + '.tmp';
-      fs.writeFileSync(tmpPath, JSON.stringify(conversations || []));
-      fs.renameSync(tmpPath, finalPath);
+      await atomicWrite(tmpPath, finalPath, JSON.stringify(conversations || []));
       return true;
     } catch (err) {
       console.error('[Conversations] 保存失败:', err.message);
@@ -1405,13 +1446,12 @@ ${conversationText}
     }
   });
 
-  ipcMain.handle('save-memory', (event, memory) => {
+  ipcMain.handle('save-memory', async (event, memory) => {
     const memoryDir = app.getPath('userData');
     fs.mkdirSync(memoryDir, { recursive: true });
     const tmpPath = path.join(memoryDir, 'memory.json.tmp');
     const finalPath = path.join(memoryDir, 'memory.json');
-    fs.writeFileSync(tmpPath, JSON.stringify(memory, null, 2));
-    fs.renameSync(tmpPath, finalPath);
+    await atomicWrite(tmpPath, finalPath, JSON.stringify(memory, null, 2));
     return true;
   });
 
@@ -1838,6 +1878,7 @@ app.on('activate', () => {
 // 应用退出前清理所有 MCP 子进程和终端 pty（防止 Windows 上的进程残留）
 app.on('before-quit', () => {
   app.isQuitting = true;
+  stopFileWatcher();
   try { mcp.closeAll(); } catch (e) { console.error('[MCP] 退出清理失败:', e.message); }
   for (const [, pty] of terminals) { try { pty.kill(); } catch (_) {} }
   terminals.clear();
