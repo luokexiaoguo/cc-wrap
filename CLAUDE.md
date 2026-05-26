@@ -44,12 +44,12 @@ Terminal IPC channels (node-pty):
 3. Call API via `api-client.js` (streaming) → parse text deltas + tool_use blocks via callbacks (`onText`, `onToolUse`, `onComplete`)
 4. Execute tools sequentially via `tool-executor.js` → send results back as `tool_result` messages
 5. Loop until no more tool calls (max `MAX_ROUNDS = 50` rounds)
-6. Context compression triggers at ~150K tokens (automatic summarization of older messages)
-7. **效率优化**: 工具结果 >3000 字符自动截断；连续 3+ 轮全部失败时自动注入策略提示阻止模型重复试错
+6. Context compression triggers at >80K tokens (progressive: 80–100K keep 8, 100–120K keep 6, 120–150K keep 4, 150K+ keep 2 recent messages; also preserves text-containing assistant messages beyond the window)
+7. **效率优化**: 工具结果普通 1500/错误 600 字符截断；滑动窗口检测卡住（最近 8 轮中 >=3 轮失败且 >=50% 失败率）时注入策略提示
 
 **Write/Edit/Bash require user approval** via an IPC permission modal. `alwaysAllowedTools` Set is now **persisted to `config.json`** (not session-only) — `agent-loop.setPersistenceStore(store)` is called from `main.js` to inject the store, and "always allow" choices write through.
 
-**executeTool context object**: `{ workDir, shell, signal, window }`. Tools use `workDir` to resolve relative paths, `signal` to bail on cancel, `window` to push IPC events back (e.g. `taskCreate`/`taskUpdate` emit `tasks-changed`).
+**executeTool context object**: `{ workDir, shell, signal, window, apiConfig, toolCallId }`. Tools use `workDir` to resolve relative paths, `signal` to bail on cancel, `window` to push IPC events back (e.g. `taskCreate`/`taskUpdate` emit `tasks-changed`), `apiConfig` for model/temperature/reasoningEffort, `toolCallId` for sub-agent routing.
 
 ### API client (`src/main/api-client.js`)
 
@@ -61,7 +61,7 @@ Message format conversion: `toOpenAIMessagesWithTools(messages, system, model)`.
 
 **Vision detection** (critical): non-vision models reject `image_url` content with HTTP 400. `modelSupportsVision(model)` checks a regex of known vision identifiers (`vision`, `vl`, `gpt-4o`, `claude`, `gemini`, `glm-4v`, etc.) plus a blacklist for `deepseek-(chat|reasoner|v3|coder)`. When false, image content blocks are stripped from the OpenAI payload and replaced with a text placeholder that tells the model to call a vision-capable MCP tool using the local path embedded in the user text.
 
-All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY` / `HTTP_PROXY` env via `undici.ProxyAgent`. AbortController makes cancel truly interrupt in-flight requests.
+All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY` / `HTTP_PROXY` env via `undici.ProxyAgent` (requires `undici` in dependencies — currently not installed, proxy config will log a warning but API calls still work directly). AbortController makes cancel truly interrupt in-flight requests.
 
 ### Tool system (`src/main/tools.js` + `tool-executor.js`)
 
@@ -81,7 +81,7 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 
 **Read tool encoding handling** (`readTextSmart` in `tool-executor.js`, mirrored in `main.js` as `readTextWithDetectedEncoding`): detects UTF-8 BOM → UTF-16 LE/BE BOM → strict UTF-8 → GBK (Windows ANSI fallback via `iconv-lite`) → latin1. Edit and Grep tools also use `readTextSmart` (not bare `'utf-8'`).
 
-**Bash** uses `spawn` (non-blocking, `tree-kill` on cancel). Shell defaults to `process.env.COMSPEC`; can be overridden via `executeTool` context `shell` param.
+**Bash** uses `spawn` (non-blocking, `tree-kill` on cancel). Windows 优先探测 Git Bash（`detectWinShell()`），找不到再回退 `process.env.COMSPEC`。Git Bash 能自动继承 Windows 系统 PATH，无需手动注入工具路径。
 
 **Task tools** (`taskCreate` / `taskUpdate`) emit `tasks-changed` IPC to the renderer after each mutation, driving the Plan UI panel. Storage is an in-memory `Map` (`taskStore`), cleared via `clear-tasks` IPC when the user switches conversations.
 
@@ -94,7 +94,7 @@ Hooks `console.log/error/warn` to write both to terminal and a file. `initLogger
 ### Settings tabs
 
 Settings modal has tabs (`data-stab`): `api`, `theme`, `general`, `logs`, `tokens`, `about`.
-- **api** — global API config, temperature slider (0–2), model add/edit forms with per-model temperature + maxTokens
+- **api** — global API config, temperature slider (0–2), model add/edit forms with per-model temperature + maxTokens + reasoningEffort (off/low/medium/high)
 - **theme** — dark/light toggle, font size slider
 - **general** — language, work directory, custom system prompt, always-allowed tools, auto-save, cache clear
 - **logs** — search (300ms debounce), refresh, clear, export buttons, `<pre>` viewer
@@ -126,7 +126,7 @@ Single ~4850-line file holding a global `state` object
 **Export conversation**: the toolbar "导出" button formats conversation as Markdown and calls `export-conversation` IPC which opens a native save dialog (default directory = workDir).
 
 ```text
-state object fields: conversations, currentConversation, config, models, skills, mcpServers, mcpStatuses, workDir, memories, isGenerating, attachedImage, tasks, openFiles, agentMessages, etc.
+state object fields: conversations, currentConversation, config, models, skills, mcpServers, mcpStatuses, workDir, memories, isGenerating, generatingConversationId, attachedImage, tasks, openFiles, agentMessages, etc.
 ```
 Function-based, no framework.
 
@@ -148,7 +148,7 @@ Function-based, no framework.
 
 Bottom panel terminal (VS Code 风格), 通过 `node-pty` + `xterm.js` 实现。
 
-**架构**: main 进程用 `node-pty` spawn shell（cmd.exe），PTY output 通过 `terminal-output` IPC 推送到渲染进程。渲染进程用 xterm.js 渲染终端界面，用户输入通过 `terminal-write` IPC 发回 main 进程写入 PTY。
+**架构**: main 进程用 `node-pty` spawn `process.env.COMSPEC`（通常是 cmd.exe），PTY output 通过 `terminal-output` IPC 推送到渲染进程。渲染进程用 xterm.js 渲染终端界面，用户输入通过 `terminal-write` IPC 发回 main 进程写入 PTY。
 
 **xterm 加载方式**: xterm.js 和 @xterm/addon-fit 的 UMD 包放在 `src/renderer/lib/` 下，通过 HTML `<script>` 标签加载（而非 preload require），因为 xterm 初始化时访问 `document`，而 preload 执行时 DOM 尚未就绪。CSP `script-src 'self'` 允许同目录脚本。
 
@@ -196,4 +196,5 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 - **Conversation flush on completion**: `flushConversations()` is called on `agent-complete` — don't replace it with `saveConversations()` (which is debounced 300ms and risks losing data if the process crashes immediately after).
 - **OpenAI image stripping**: if you add a new vision model, update `modelSupportsVision` regex in `api-client.js`, otherwise users with that model will hit the same 400 cycle that broke DeepSeek before.
 - **File tree not loading**: `loadFileTree()` must be called after every code path that sets `state.workDir`. The three paths are `init()` (startup), settings panel "select" button, and `/workdir` command. Missing this call means the sidebar file tree stays empty even though the path is persisted in config.
-- **`esc()` type-safety**: the `esc()` function calls `.replace()` on its argument — passing a Number causes `text.replace is not a function` TypeError. Always wrap values in `String()` before passing to `esc()`, especially computed values like `month + 1`. 
+- **`esc()` type-safety**: the `esc()` function calls `.replace()` on its argument — passing a Number causes `text.replace is not a function` TypeError. Always wrap values in `String()` before passing to `esc()`, especially computed values like `month + 1`.
+- **Multi-conversation streaming guards**: All three streaming event handlers (`agent-stream-text`, `agent-stream-tool-start`, `agent-stream-tool-result`) use the `isGenConv` pattern — `state.generatingConversationId === state.currentConversation.id`. Data model updates always go to the generating conversation (found by `generatingConversationId`); DOM updates only happen when `isGenConv` is true. Every code path that sets `isGenerating = false` must also clear `generatingConversationId = null` (currently 4 paths: `agent-complete`, `agent-start` catch, `generateResponse()` catch, `stopGeneration()`). Missing any of these will leave stale state. `setThinking()` also uses this guard to avoid showing the thinking indicator on non-generating conversations. 

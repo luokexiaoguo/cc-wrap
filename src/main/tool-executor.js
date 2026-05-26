@@ -256,7 +256,7 @@ function grep(input, ctx) {
 
 // ==================== 命令执行（异步、不阻塞主进程）====================
 
-// Windows 上探测 git-bash（很多模型从 Skill 里学到的是 bash 风格命令，cmd 不认）
+// Windows 上探测 git-bash（模型习惯写 bash 风格命令，cmd 不认）
 let _winShellCache = null;
 function detectWinShell() {
   if (_winShellCache !== null) return _winShellCache;
@@ -274,38 +274,6 @@ function detectWinShell() {
   return null;
 }
 
-// Windows 上检测常见工具的真实路径（绕过 git-bash 非交互模式丢 PATH 的问题）
-const _toolPathCache = {};
-function detectWindowsToolPaths() {
-  if (_toolPathCache._done) return _toolPathCache;
-  _toolPathCache._done = true;
-  if (process.platform !== 'win32') return _toolPathCache;
-  try {
-    // Python: LOCALAPPDATA\Programs\Python\Python*\python.exe
-    const pyRoot = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python');
-    if (fs.existsSync(pyRoot)) {
-      const versions = fs.readdirSync(pyRoot).filter(d => /^Python\d+$/.test(d)).sort().reverse();
-      for (const ver of versions) {
-        if (fs.existsSync(path.join(pyRoot, ver, 'python.exe'))) {
-          _toolPathCache.python = path.join(pyRoot, ver);
-          break;
-        }
-      }
-    }
-    // npm 全局: APPDATA\npm 和 LOCALAPPDATA\npm
-    const appData = process.env.APPDATA || '';
-    if (appData && fs.existsSync(path.join(appData, 'npm'))) {
-      _toolPathCache.npm = path.join(appData, 'npm');
-    }
-    // Node.js: Program Files\nodejs
-    const progFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
-    if (fs.existsSync(path.join(progFiles, 'nodejs', 'node.exe'))) {
-      _toolPathCache.nodejs = path.join(progFiles, 'nodejs');
-    }
-  } catch (_) {}
-  return _toolPathCache;
-}
-
 function bash(input, ctx) {
   const { command, timeout = 120000 } = input;
   if (!command) return { error: 'command is required' };
@@ -313,7 +281,7 @@ function bash(input, ctx) {
   return new Promise((resolve) => {
     const isWin = process.platform === 'win32';
     // 优先用 ctx.shell（用户在设置里指定），否则 Windows 上探测 git-bash，
-    // 没有再回退 cmd.exe。模型经常生成 bash 风格命令（/c/Users/...、单引号），cmd 不认会反复 0 退出。
+    // 没有再回退 cmd.exe。模型习惯写 bash 风格命令，用 git-bash 直接兼容。
     const winBash = isWin ? detectWinShell() : null;
     const shell = ctx.shell || (isWin ? (winBash || process.env.COMSPEC || 'cmd.exe') : '/bin/sh');
     const useBash = !isWin || (shell && /bash(\.exe)?$/i.test(shell));
@@ -324,46 +292,7 @@ function bash(input, ctx) {
     }
     const shellArgs = useBash ? ['-c', cmd] : ['/d', '/s', '/c', cmd];
 
-    // 确保 Windows 工具路径在 PATH 中（git-bash 非交互模式会丢失很多 Windows PATH 条目）
     let env = { ...process.env, ..._envConfig };
-    if (isWin) {
-      const toolPaths = detectWindowsToolPaths();
-      const extraPaths = [];
-      if (toolPaths.python) {
-        extraPaths.push(toolPaths.python, path.join(toolPaths.python, 'Scripts'));
-      }
-      if (toolPaths.npm) {
-        extraPaths.push(toolPaths.npm);
-      }
-      if (toolPaths.nodejs) {
-        extraPaths.push(toolPaths.nodejs);
-      }
-      if (extraPaths.length > 0) {
-        const paths = (env.PATH || '').split(path.delimiter);
-        let changed = false;
-        for (const p of extraPaths) {
-          const idx = paths.findIndex(x => x.toLowerCase() === p.toLowerCase());
-          if (idx === -1) {
-            paths.unshift(p);
-            changed = true;
-          }
-        }
-        // 同时确保 WindowsApps（Store 中转器）不排在真实工具路径前面
-        const winAppsIdx = paths.findIndex(x => x.includes('Microsoft\\WindowsApps'));
-        if (changed || (winAppsIdx > 0 && extraPaths.some(ep => {
-          const epIdx = paths.findIndex(x => x.toLowerCase() === ep.toLowerCase());
-          return epIdx !== -1 && epIdx > winAppsIdx;
-        }))) {
-          const winApps = winAppsIdx !== -1 ? paths.splice(winAppsIdx, 1)[0] : null;
-          const insertAt = Math.min(...extraPaths.map(ep => {
-            const i = paths.findIndex(x => x.toLowerCase() === ep.toLowerCase());
-            return i === -1 ? Infinity : i;
-          }));
-          if (winApps) paths.splice(insertAt === Infinity ? paths.length : insertAt, 0, winApps);
-          env.PATH = paths.join(path.delimiter);
-        }
-      }
-    }
 
     let proc;
     try {
