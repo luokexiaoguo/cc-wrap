@@ -6,6 +6,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const iconv = require('iconv-lite');
 const zlib = require('zlib');
+const XLSX = require('xlsx');
 
 // pdfjs-dist ESM 模块，延迟加载
 let _pdfjsLib = null;
@@ -139,12 +140,77 @@ async function readPdf(filePath) {
 }
 
 /**
- * 提取文件文本内容（用于 Grep 搜索 docx/pdf）
+ * 读取 Excel 文件 (.xlsx/.xls) 并格式化为 Markdown 表格
+ */
+function readExcel(filePath) {
+  const wb = XLSX.readFile(filePath);
+  const results = [];
+  for (const name of wb.SheetNames) {
+    const sheet = wb.Sheets[name];
+    const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (data.length === 0) continue;
+    results.push(`## Sheet: ${name}`);
+    // Markdown 表格
+    const header = data[0].map(c => String(c).trim());
+    results.push('| ' + header.join(' | ') + ' |');
+    results.push('| ' + header.map(() => '---').join(' | ') + ' |');
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i].map(c => String(c).trim());
+      // 补齐列数
+      while (row.length < header.length) row.push('');
+      results.push('| ' + row.join(' | ') + ' |');
+    }
+    results.push('');
+  }
+  return results.join('\n') || '[Excel 无数据]';
+}
+
+/**
+ * 读取 CSV 并格式化为 Markdown 表格（自动检测分隔符）
+ */
+function readCsv(filePath) {
+  const raw = readTextSmart(filePath);
+  const lines = raw.split('\n').filter(l => l.trim());
+  if (lines.length === 0) return '[CSV 无数据]';
+  // 检测分隔符：逗号、制表符、分号
+  const firstLine = lines[0];
+  const separator = firstLine.includes('\t') ? '\t' : firstLine.includes(';') ? ';' : ',';
+  const sepName = separator === '\t' ? 'TAB' : separator === ';' ? ';' : ',';
+  const results = [];
+  for (let i = 0; i < lines.length; i++) {
+    // 简单 CSV 解析（处理引号内的分隔符）
+    const cells = [];
+    let cell = '', inQuote = false;
+    for (let j = 0; j < lines[i].length; j++) {
+      const ch = lines[i][j];
+      if (ch === '"') { inQuote = !inQuote; }
+      else if (ch === separator && !inQuote) { cells.push(cell.trim()); cell = ''; }
+      else { cell += ch; }
+    }
+    cells.push(cell.trim());
+    if (i === 0) {
+      results.push('| ' + cells.join(' | ') + ' |');
+      results.push('| ' + cells.map(() => '---').join(' | ') + ' |');
+    } else {
+      results.push('| ' + cells.join(' | ') + ' |');
+    }
+  }
+  return results.join('\n');
+}
+
+/**
+ * 提取文件文本内容（用于 Grep 搜索 docx/xlsx/csv）
  */
 function extractFileText(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.docx') {
     try { return readDocx(filePath); } catch { return ''; }
+  }
+  if (ext === '.xlsx' || ext === '.xls') {
+    try { return readExcel(filePath); } catch { return ''; }
+  }
+  if (ext === '.csv') {
+    try { return readCsv(filePath); } catch { return ''; }
   }
   // PDF 需要异步，Grep 中跳过（用 readTextSmart 兜底）
   return readTextSmart(filePath);
@@ -194,6 +260,34 @@ async function read(input, ctx) {
     // .pdf 文件：提取文本内容
     if (ext === '.pdf') {
       const content = await readPdf(filePath);
+      const lines = content.split('\n');
+      const offset = input.offset || 0;
+      const limit = input.limit || lines.length;
+      const sliced = lines.slice(offset, offset + limit);
+      const numbered = sliced.map((line, i) => `${offset + i + 1}\t${line}`).join('\n');
+      const total = lines.length;
+      const from = offset + 1;
+      const to = Math.min(offset + limit, total);
+      return { content: `${from}-${to} of ${total} lines\n${numbered}` };
+    }
+
+    // .xlsx/.xls 文件：格式化为 Markdown 表格
+    if (ext === '.xlsx' || ext === '.xls') {
+      const content = readExcel(filePath);
+      const lines = content.split('\n');
+      const offset = input.offset || 0;
+      const limit = input.limit || lines.length;
+      const sliced = lines.slice(offset, offset + limit);
+      const numbered = sliced.map((line, i) => `${offset + i + 1}\t${line}`).join('\n');
+      const total = lines.length;
+      const from = offset + 1;
+      const to = Math.min(offset + limit, total);
+      return { content: `${from}-${to} of ${total} lines\n${numbered}` };
+    }
+
+    // .csv 文件：格式化为 Markdown 表格
+    if (ext === '.csv') {
+      const content = readCsv(filePath);
       const lines = content.split('\n');
       const offset = input.offset || 0;
       const limit = input.limit || lines.length;

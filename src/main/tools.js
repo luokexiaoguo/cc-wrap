@@ -4,7 +4,7 @@
 const TOOL_DEFINITIONS = [
   {
     name: 'Read',
-    description: 'Read a file from the local filesystem. Returns file contents with line numbers. Supports text files (.txt, .md, .py, .js, etc.), .docx (Word), and .pdf files. Auto-detects encoding (UTF-8, GBK, UTF-16). For large files (>2000 lines), use offset and limit parameters.',
+    description: 'Read a file from the local filesystem. Returns file contents with line numbers. Supports: text files (.txt, .md, .py, .js, etc.), .docx (Word), .pdf, .xlsx/.xls (Excel → Markdown table), .csv (→ Markdown table). Auto-detects encoding (UTF-8, GBK, UTF-16). For large files, use offset and limit parameters.',
     input_schema: {
       type: 'object',
       properties: {
