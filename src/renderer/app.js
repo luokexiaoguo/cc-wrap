@@ -2786,16 +2786,33 @@ async function compactConversation() {
     '5. 控制在200字以内\n\n' +
     '对话内容：\n' + summaryContent;
 
-  addAssistantMsg('正在压缩对话...');
+  setThinking(true, '正在压缩对话...');
+
+  // 获取模型配置（apiKey / endpoint）
+  var modelConfig = null;
+  for (var j = 0; j < state.models.length; j++) {
+    if (state.models[j].id === state.config.defaultModel) {
+      modelConfig = state.models[j];
+      break;
+    }
+  }
 
   try {
-    var result = await window.api.invoke('claude-api-stream', [
-      { role: 'user', content: [{ type: 'text', text: summarizePrompt }] }
-    ], {
+    var compactOpts = {
       model: state.config.defaultModel,
       maxTokens: 500,
       temperature: 0.3
-    });
+    };
+    if (modelConfig) {
+      if (modelConfig.apiKey) compactOpts.apiKey = modelConfig.apiKey;
+      if (modelConfig.endpoint) compactOpts.endpoint = modelConfig.endpoint;
+    }
+
+    var result = await window.api.invoke('claude-api-stream', [
+      { role: 'user', content: [{ type: 'text', text: summarizePrompt }] }
+    ], compactOpts);
+
+    setThinking(false);
 
     if (result.success && result.content) {
       // 替换消息为压缩后的摘要 + 最近的消息
@@ -2811,6 +2828,7 @@ async function compactConversation() {
       addAssistantMsg('压缩失败: ' + (result.error || '未知错误'));
     }
   } catch (err) {
+    setThinking(false);
     addAssistantMsg('压缩失败: ' + err.message);
   }
 }
