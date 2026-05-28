@@ -4,7 +4,7 @@
 const TOOL_DEFINITIONS = [
   {
     name: 'Read',
-    description: 'Read a file from the local filesystem. Returns file contents with line numbers. Supports text files. For large files (>2000 lines), use offset and limit parameters.',
+    description: 'Read a file from the local filesystem. Returns file contents with line numbers. Supports text files (.txt, .md, .py, .js, etc.), .docx (Word), and .pdf files. Auto-detects encoding (UTF-8, GBK, UTF-16). For large files (>2000 lines), use offset and limit parameters.',
     input_schema: {
       type: 'object',
       properties: {
@@ -17,12 +17,13 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'Write',
-    description: 'Write content to a file. Creates parent directories if needed. Overwrites existing files.',
+    description: 'Write content to a file. Creates parent directories if needed. Overwrites existing files. Supports encoding option for non-UTF-8 files.',
     input_schema: {
       type: 'object',
       properties: {
         file_path: { type: 'string', description: 'Absolute path to the file' },
-        content: { type: 'string', description: 'Content to write' }
+        content: { type: 'string', description: 'Content to write' },
+        encoding: { type: 'string', description: 'File encoding: utf-8 (default), gbk, gb2312, gb18030, utf-16le, utf-16be, latin1', enum: ['utf-8', 'gbk', 'gb2312', 'gb18030', 'utf-16le', 'utf-16be', 'latin1'] }
       },
       required: ['file_path', 'content']
     }
@@ -42,7 +43,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'Glob',
-    description: 'Find files by pattern (e.g., "**/*.js", "src/**/*.ts"). Returns matching file paths.',
+    description: 'Find files by glob pattern (e.g., "**/*.js", "src/**/*.ts", "**/*.docx"). Returns matching file paths sorted by modification time.',
     input_schema: {
       type: 'object',
       properties: {
@@ -54,7 +55,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'Grep',
-    description: 'Search file contents using regex. Returns matching lines with file paths and line numbers.',
+    description: 'Search file contents using regex. Returns matching lines with file paths and line numbers. Searches inside .docx files automatically.',
     input_schema: {
       type: 'object',
       properties: {

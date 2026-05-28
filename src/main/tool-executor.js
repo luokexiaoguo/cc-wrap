@@ -7,6 +7,13 @@ const { spawn } = require('child_process');
 const iconv = require('iconv-lite');
 const zlib = require('zlib');
 
+// pdfjs-dist ESM 模块，延迟加载
+let _pdfjsLib = null;
+async function getPdfjsLib() {
+  if (!_pdfjsLib) _pdfjsLib = await import('pdfjs-dist');
+  return _pdfjsLib;
+}
+
 // 允许 main.js 注入 env 配置（如 TAVILY_API_KEY 等）
 let _envConfig = {};
 function setEnvConfig(env) { _envConfig = env || {}; }
@@ -114,6 +121,35 @@ function readDocx(filePath) {
   return '[docx 中未找到 word/document.xml]';
 }
 
+/**
+ * 读取 .pdf 文件并提取纯文本
+ */
+async function readPdf(filePath) {
+  const pdfjsLib = await getPdfjsLib();
+  const buf = new Uint8Array(fs.readFileSync(filePath));
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  const lines = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map(item => item.str).join('');
+    if (pageText.trim()) lines.push(pageText);
+  }
+  return lines.join('\n') || '[PDF 无文本内容]';
+}
+
+/**
+ * 提取文件文本内容（用于 Grep 搜索 docx/pdf）
+ */
+function extractFileText(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.docx') {
+    try { return readDocx(filePath); } catch { return ''; }
+  }
+  // PDF 需要异步，Grep 中跳过（用 readTextSmart 兜底）
+  return readTextSmart(filePath);
+}
+
 // 解析路径：相对路径基于 workDir，绝对路径保持不变
 function resolvePath(p, workDir) {
   if (!p) return workDir || process.cwd();
@@ -128,7 +164,7 @@ function normalizeLineEndings(s) {
 
 // ==================== 文件操作工具 ====================
 
-function read(input, ctx) {
+async function read(input, ctx) {
   const fp = input.file_path || input.filePath;
   if (!fp) return { error: 'file_path is required' };
   const filePath = resolvePath(fp, ctx.workDir);
@@ -139,9 +175,25 @@ function read(input, ctx) {
       return { error: `文件过大 (${(stat.size / 1024 / 1024).toFixed(1)}MB > ${READ_MAX_BYTES / 1024 / 1024}MB)。请用 offset/limit 分页读取。` };
     }
 
+    const ext = path.extname(filePath).toLowerCase();
+
     // .docx 文件：ZIP 内的 XML，自动提取纯文本
-    if (filePath.toLowerCase().endsWith('.docx')) {
+    if (ext === '.docx') {
       const content = readDocx(filePath);
+      const lines = content.split('\n');
+      const offset = input.offset || 0;
+      const limit = input.limit || lines.length;
+      const sliced = lines.slice(offset, offset + limit);
+      const numbered = sliced.map((line, i) => `${offset + i + 1}\t${line}`).join('\n');
+      const total = lines.length;
+      const from = offset + 1;
+      const to = Math.min(offset + limit, total);
+      return { content: `${from}-${to} of ${total} lines\n${numbered}` };
+    }
+
+    // .pdf 文件：提取文本内容
+    if (ext === '.pdf') {
+      const content = await readPdf(filePath);
       const lines = content.split('\n');
       const offset = input.offset || 0;
       const limit = input.limit || lines.length;
@@ -175,12 +227,19 @@ function write(input, ctx) {
   const filePath = input.file_path || input.filePath;
   if (!filePath || content === undefined) return { error: 'file_path and content are required' };
   const resolved = resolvePath(filePath, ctx.workDir);
+  const encoding = input.encoding || 'utf-8';
 
   try {
     const dir = path.dirname(resolved);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(resolved, content, 'utf-8');
-    return { content: `File written: ${resolved} (${content.length} chars)` };
+    // GBK/GB2312/GB18030 通过 iconv-lite 编码
+    if (encoding === 'gbk' || encoding === 'gb2312' || encoding === 'gb18030') {
+      const buf = iconv.encode(content, encoding);
+      fs.writeFileSync(resolved, buf);
+    } else {
+      fs.writeFileSync(resolved, content, encoding);
+    }
+    return { content: `File written: ${resolved} (${content.length} chars, ${encoding})` };
   } catch (err) {
     return { error: err.message };
   }
@@ -284,7 +343,9 @@ function grep(input, ctx) {
         // 跳过超大文件
         const stat = fs.statSync(filePath);
         if (stat.size > 5 * 1024 * 1024) return;
-        const content = readTextSmart(filePath);
+        // .docx 文件用专用解析器提取文本
+        const ext = path.extname(filePath).toLowerCase();
+        const content = ext === '.docx' ? extractFileText(filePath) : readTextSmart(filePath);
         const lines = content.split('\n');
         lines.forEach((line, i) => {
           regex.lastIndex = 0;
