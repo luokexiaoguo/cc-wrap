@@ -1692,8 +1692,8 @@ function appendToolCallIncremental(tc) {
   container.appendChild(wrapper.firstChild);
   // Write/Edit 工具自动展开工具栏组，让用户看到文件变更
   if (tc.name === 'Write' || tc.name === 'Edit') {
-    if (calls && calls.style.display === 'none') {
-      calls.style.display = 'block';
+    if (container && container.style.display === 'none') {
+      container.style.display = 'block';
       var toggle = group.querySelector('.tool-calls-bar-toggle');
       if (toggle) toggle.textContent = '▼';
     }
