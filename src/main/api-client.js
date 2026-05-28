@@ -54,23 +54,101 @@ function shouldUseAnthropicFormat(endpoint, model) {
 
 /**
  * 根据 reasoningEffort 设置修改请求体
+ * 自动识别模型，注入对应的思考参数
  * @param {object} body - 请求体对象（会被原地修改）
  * @param {string|null} effort - 'off'|'low'|'medium'|'high'|null
  * @param {boolean} isAnthropic - 是否为 Anthropic 格式
  */
 function applyReasoningEffort(body, effort, isAnthropic) {
-  if (!effort || effort === 'off') return;
+  if (!effort) return;
 
-  if (isAnthropic) {
-    // Anthropic Adaptive Thinking (Opus 4.6+, Sonnet 4.6+)
-    const effortMap = { low: 'low', medium: 'medium', high: 'high' };
-    body.thinking = { type: 'adaptive' };
-    body.output_config = { effort: effortMap[effort] || 'high' };
-  } else {
-    // OpenAI 兼容格式：reasoning_effort 作为顶级字段
-    // 不支持的模型会静默忽略此参数
-    body.reasoning_effort = effort;
+  const model = (body.model || '').toLowerCase();
+  const on = effort !== 'off';
+
+  // === Anthropic Claude (原生 API) ===
+  // claude-* 模型 + anthropic.com endpoint
+  if (model.startsWith('claude-')) {
+    if (!on) { body.thinking = { type: 'disabled' }; return; }
+    const budgetMap = { low: 2048, medium: 8192, high: 16384 };
+    body.thinking = { type: 'enabled', budget_tokens: budgetMap[effort] || 8192 };
+    body.output_config = { effort };
+    return;
   }
+
+  // === OpenAI o-series / GPT-5 ===
+  if (model.startsWith('o') || model.startsWith('gpt-5')) {
+    if (!on) return; // o-series 不支持关闭思考
+    body.reasoning_effort = effort;
+    return;
+  }
+
+  // === Qwen3 (通义千问) ===
+  if (model.includes('qwen3') || model.includes('qwq')) {
+    body.enable_thinking = on;
+    return;
+  }
+
+  // === DeepSeek ===
+  if (model.includes('deepseek')) {
+    if (model.includes('reasoner') || model.match(/[-_]r1/)) {
+      // R1 始终推理，不支持开关
+      return;
+    }
+    // V4+: thinking 对象格式（原生 API + DashScope 均兼容）
+    if (model.includes('v4') || model.includes('v5')) {
+      body.thinking = { type: on ? 'enabled' : 'disabled' };
+      return;
+    }
+    // V3 及更早: enable_thinking 布尔格式（DashScope 兼容）
+    body.enable_thinking = on;
+    return;
+  }
+
+  // === Kimi / Moonshot ===
+  if (model.includes('kimi') || model.includes('moonshot')) {
+    body.thinking = { type: on ? 'enabled' : 'disabled' };
+    return;
+  }
+
+  // === Doubao / 豆包 / 火山方舟 ===
+  if (model.includes('doubao') || model.includes('ark-')) {
+    if (!on) { body.thinking = { type: 'disabled' }; return; }
+    const budgetMap = { low: 2048, medium: 4096, high: 8192 };
+    body.thinking = { type: 'enabled', budget_tokens: budgetMap[effort] || 4096 };
+    return;
+  }
+
+  // === Gemini ===
+  if (model.includes('gemini')) {
+    if (!body.generationConfig) body.generationConfig = {};
+    if (!on) {
+      body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      return;
+    }
+    // Gemini 3.x 用 thinkingLevel, 2.5 用 thinkingBudget
+    if (model.includes('gemini-3') || model.match(/gemini-\d+\.\d+/)) {
+      body.generationConfig.thinkingConfig = { thinkingLevel: effort };
+    } else {
+      const budgetMap = { low: 1024, medium: 4096, high: 16384 };
+      body.generationConfig.thinkingConfig = { thinkingBudget: budgetMap[effort] || 4096 };
+    }
+    return;
+  }
+
+  // === GLM (智谱) ===
+  // GLM-Z1 / GLM-5.1 / GLM-4.1V-Thinking 始终推理，无开关
+  if (model.includes('glm-z1') || model.includes('glm-5') || model.includes('glm-4.1v-thinking')) {
+    return;
+  }
+
+  // === MiMo (小米，始终推理) ===
+  if (model.includes('mimo')) {
+    return;
+  }
+
+  // === MiniMax / 其他未知模型 ===
+  // 发送 reasoning_effort，不支持的 API 会静默忽略
+  if (on) body.reasoning_effort = effort;
 }
 
 // ==================== Anthropic 格式 ====================
