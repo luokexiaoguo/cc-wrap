@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const iconv = require('iconv-lite');
+const zlib = require('zlib');
 
 // 允许 main.js 注入 env 配置（如 TAVILY_API_KEY 等）
 let _envConfig = {};
@@ -58,6 +59,61 @@ function readTextSmart(filePath) {
 // Read 工具默认大小上限（防止读大文件 OOM 主进程）
 const READ_MAX_BYTES = 2 * 1024 * 1024;
 
+/**
+ * 读取 .docx 文件并提取纯文本
+ * docx 本质是 ZIP 包内的 XML，用 zlib 解压 + 正则提取文本
+ */
+function readDocx(filePath) {
+  const zipBuf = fs.readFileSync(filePath);
+  // 查找 ZIP 中央目录记录，定位 word/document.xml
+  const eocdOffset = zipBuf.lastIndexOf(Buffer.from('PK\x05\x06'));
+  if (eocdOffset === -1) return '[无法解析 docx: 不是有效的 ZIP 文件]';
+  const cdOffset = zipBuf.readUInt32LE(eocdOffset + 16);
+  let pos = cdOffset;
+  while (pos < eocdOffset) {
+    if (zipBuf.readUInt32LE(pos) !== 0x02014b50) break;
+    const compMethod = zipBuf.readUInt16LE(pos + 10);
+    const compSize = zipBuf.readUInt32LE(pos + 20);
+    const uncompSize = zipBuf.readUInt32LE(pos + 24);
+    const nameLen = zipBuf.readUInt16LE(pos + 28);
+    const extraLen = zipBuf.readUInt16LE(pos + 30);
+    const commentLen = zipBuf.readUInt16LE(pos + 32);
+    const localHeaderOffset = zipBuf.readUInt32LE(pos + 42);
+    const name = zipBuf.slice(pos + 46, pos + 46 + nameLen).toString('utf-8');
+    if (name === 'word/document.xml') {
+      // 读取本地文件头获取数据偏移
+      const lNameLen = zipBuf.readUInt16LE(localHeaderOffset + 26);
+      const dataOffset = localHeaderOffset + 30 + lNameLen;
+      const dataBuf = zipBuf.slice(dataOffset, dataOffset + compSize);
+      let xmlBuf;
+      if (compMethod === 8) {
+        xmlBuf = zlib.inflateRawSync(dataBuf);
+      } else if (compMethod === 0) {
+        xmlBuf = dataBuf;
+      } else {
+        return '[不支持的 docx 压缩方法: ' + compMethod + ']';
+      }
+      const xml = xmlBuf.toString('utf-8');
+      // 提取所有 <w:t> 文本节点，按段落分组
+      const lines = [];
+      const paragraphs = xml.split(/<w:p[\s>]/);
+      for (let i = 1; i < paragraphs.length; i++) {
+        const texts = [];
+        const re = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+        let m;
+        while ((m = re.exec(paragraphs[i])) !== null) {
+          texts.push(m[1]);
+        }
+        const line = texts.join('');
+        if (line.trim()) lines.push(line);
+      }
+      return lines.join('\n');
+    }
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  return '[docx 中未找到 word/document.xml]';
+}
+
 // 解析路径：相对路径基于 workDir，绝对路径保持不变
 function resolvePath(p, workDir) {
   if (!p) return workDir || process.cwd();
@@ -81,6 +137,20 @@ function read(input, ctx) {
     const stat = fs.statSync(filePath);
     if (stat.size > READ_MAX_BYTES && !(input.offset || input.limit)) {
       return { error: `文件过大 (${(stat.size / 1024 / 1024).toFixed(1)}MB > ${READ_MAX_BYTES / 1024 / 1024}MB)。请用 offset/limit 分页读取。` };
+    }
+
+    // .docx 文件：ZIP 内的 XML，自动提取纯文本
+    if (filePath.toLowerCase().endsWith('.docx')) {
+      const content = readDocx(filePath);
+      const lines = content.split('\n');
+      const offset = input.offset || 0;
+      const limit = input.limit || lines.length;
+      const sliced = lines.slice(offset, offset + limit);
+      const numbered = sliced.map((line, i) => `${offset + i + 1}\t${line}`).join('\n');
+      const total = lines.length;
+      const from = offset + 1;
+      const to = Math.min(offset + limit, total);
+      return { content: `${from}-${to} of ${total} lines\n${numbered}` };
     }
 
     const content = readTextSmart(filePath);
