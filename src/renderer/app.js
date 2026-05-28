@@ -1039,6 +1039,22 @@ function setupEvents() {
     }
     if (!target) return;
 
+    // 自动展开折叠的工具栏，让用户看到选项
+    var group = target.closest('.tool-calls-group');
+    if (group) {
+      var calls = group.querySelector('.tool-calls');
+      if (calls && calls.style.display === 'none') {
+        calls.style.display = 'block';
+        var toggle = group.querySelector('.tool-calls-bar-toggle');
+        if (toggle) toggle.textContent = '▼';
+      }
+    }
+    // 隐藏 AskUserQuestion 的原始输入/结果，只显示选项
+    var inputEl = target.querySelector('.tool-call-input');
+    var resultEl = target.querySelector('.tool-call-result');
+    if (inputEl) inputEl.style.display = 'none';
+    if (resultEl) resultEl.style.display = 'none';
+
     var body = target.querySelector('.tool-call-body');
     if (!body) return;
 
@@ -1595,6 +1611,8 @@ function renderToolCallHTML(tc) {
   var shouldExpand = tc.status === 'running' || tc.status === 'error';
   // Agent 工具且有子 Agent 事件时默认展开
   if (tc.name === 'Agent' && tc.subAgentEvents && tc.subAgentEvents.length > 0) shouldExpand = true;
+  // Write/Edit 完成后默认展开，让用户看到文件变更
+  if ((tc.name === 'Write' || tc.name === 'Edit') && tc.status === 'done') shouldExpand = true;
   var resultPreview = '';
   if (tc.result && tc.status !== 'error') {
     var raw = String(tc.result).replace(/\s+/g, ' ').trim();
@@ -1672,6 +1690,14 @@ function appendToolCallIncremental(tc) {
   var wrapper = document.createElement('div');
   wrapper.innerHTML = renderToolCallHTML(tc);
   container.appendChild(wrapper.firstChild);
+  // Write/Edit 工具自动展开工具栏组，让用户看到文件变更
+  if (tc.name === 'Write' || tc.name === 'Edit') {
+    if (calls && calls.style.display === 'none') {
+      calls.style.display = 'block';
+      var toggle = group.querySelector('.tool-calls-bar-toggle');
+      if (toggle) toggle.textContent = '▼';
+    }
+  }
   return true;
 }
 
