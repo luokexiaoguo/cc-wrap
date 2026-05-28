@@ -136,7 +136,7 @@ Inject domain knowledge into System Prompt for better AI understanding.
 |---------|-------------|
 | Agent loop | Multi-round tool calls, streaming output, model-aware compression, stuck detection |
 | Thinking level | Auto-detect model, inject correct thinking/reasoning parameters |
-| File ops | Read / Write / Edit / Glob / Grep, auto encoding detection (UTF-8 / GBK / UTF-16) |
+| File ops | Read / Write / Edit / Glob / Grep, supports text / .docx / .pdf / .xlsx / .csv, auto encoding detection |
 | Bash execution | Non-blocking spawn, Git Bash / cmd auto-detect, cancel + timeout support |
 | Multi-model | 13+ models, Anthropic + OpenAI + Google protocols, vision model auto-detect |
 | MCP integration | stdio + HTTP/SSE dual mode, one-click install, auto-reconnect |

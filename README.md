@@ -136,7 +136,7 @@ AI 自动沉淀关键信息，跨对话持久化。
 |------|------|
 | Agent 循环 | 多轮工具调用、流式输出、模型感知压缩、卡住检测 |
 | 思考级别 | 自动识别模型，注入对应 thinking/reasoning 参数 |
-| 文件操作 | Read / Write / Edit / Glob / Grep，自动编码识别（UTF-8 / GBK / UTF-16） |
+| 文件操作 | Read / Write / Edit / Glob / Grep，支持文本 / .docx / .pdf / .xlsx / .csv，自动编码识别 |
 | Bash 执行 | 非阻塞 spawn，Git Bash / cmd 自动探测，支持取消、超时 |
 | 多模型 | 13+ 种模型，Anthropic + OpenAI + Google 三协议，视觉模型自动识别 |
 | MCP 集成 | stdio + HTTP/SSE 双模式，一键安装，自动重连 |
