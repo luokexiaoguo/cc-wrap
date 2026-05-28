@@ -1,6 +1,6 @@
 {
   "name": "cc-wrap",
-  "version": "1.1.6-beta.1",
+  "version": "1.1.6",
   "description": "cc-wrap Desktop",
   "main": "src/main/main.js",
   "scripts": {
