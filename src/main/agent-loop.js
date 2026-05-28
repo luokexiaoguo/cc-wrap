@@ -146,13 +146,8 @@ async function runAgentLoop(mainWindow, options) {
     let roundHistory = [];
     let stuckHintInjected = false;
 
-    // 自动续推：模型中途停止出 tool_call 时自动追加"继续"消息
+    // 自动续推计数器（模型输出过短时自动推进）
     let continueRetries = 0;
-    const CONTINUE_PROMPTS = [
-      '继续使用工具完成任务，不要停止。',
-      '任务尚未完成，请继续使用工具执行下一步。',
-      '请继续。如果你认为任务已完成，请总结结果。',
-    ];
 
     while (round < MAX_ROUNDS) {
       if (cancelToken.cancelled) {
@@ -281,15 +276,17 @@ async function runAgentLoop(mainWindow, options) {
 
       // 如果没有工具调用或不是 tool_use 停止原因，结束循环
       if (toolCalls.length === 0 || stopReason !== 'tool_use') {
-        // 自动续推：如果之前有工具调用（任务未完成）且未超过重试上限，追加"继续"消息再跑一轮
+        // 自动续推：仅当模型几乎没有文本输出（<200字符，说明可能卡住了）
+        // 且之前有过工具调用时，才自动推进。模型已经给出完整回答时不续推。
         const hadToolCalls = roundHistory.some(r => r.count > 0);
         const maxContinue = getMaxContinueRetries(apiConfig.model);
-        if (hadToolCalls && continueRetries < maxContinue && roundHistory.length > 0 && !cancelToken.cancelled) {
+        const shortResponse = !fullText || fullText.length < 200;
+        if (hadToolCalls && shortResponse && continueRetries < maxContinue && roundHistory.length > 0 && !cancelToken.cancelled) {
           continueRetries++;
-          const contPrompt = CONTINUE_PROMPTS[Math.min(continueRetries - 1, CONTINUE_PROMPTS.length - 1)];
-          console.log(`[Agent Loop] 自动续推 (${continueRetries}/${maxContinue}): ${contPrompt}`);
-          currentMessages.push({ role: 'user', content: contPrompt });
-          round++; // 续推算一轮，但不算在 roundHistory 里（不触发卡住检测）
+          // 使用 system 角色注入而非 user，避免污染对话记录
+          console.log(`[Agent Loop] 自动续推 (${continueRetries}/${maxContinue}): 模型输出过短(${fullText ? fullText.length : 0}字符)，继续推进`);
+          currentMessages.push({ role: 'user', content: '请继续执行之前的任务。' });
+          round++;
           continue;
         }
         sendToRenderer(mainWindow, 'agent-complete', {
