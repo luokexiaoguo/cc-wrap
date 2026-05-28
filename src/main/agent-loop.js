@@ -16,13 +16,6 @@ const PERMISSION_REQUIRED_TOOLS = ['Write', 'Edit', 'Bash'];
 const MAX_ROUNDS = 50;
 
 // 自动续推：模型停止出 tool_call 时的最大重试次数（大上下文模型需要更多次）
-function getMaxContinueRetries(model) {
-  if (!model) return 3;
-  const m = model.toLowerCase();
-  if (m.includes('minimax') || m.includes('m2.7')) return 6;
-  return 3;
-}
-
 // 活跃的 agent loop（用于取消）
 const activeLoops = new Map();
 
@@ -145,9 +138,6 @@ async function runAgentLoop(mainWindow, options) {
     // 卡住检测：滑动窗口追踪最近 8 轮的失败率
     let roundHistory = [];
     let stuckHintInjected = false;
-
-    // 自动续推计数器（模型输出过短时自动推进）
-    let continueRetries = 0;
 
     while (round < MAX_ROUNDS) {
       if (cancelToken.cancelled) {
@@ -276,19 +266,6 @@ async function runAgentLoop(mainWindow, options) {
 
       // 如果没有工具调用或不是 tool_use 停止原因，结束循环
       if (toolCalls.length === 0 || stopReason !== 'tool_use') {
-        // 自动续推：仅当模型几乎没有文本输出（<200字符，说明可能卡住了）
-        // 且之前有过工具调用时，才自动推进。模型已经给出完整回答时不续推。
-        const hadToolCalls = roundHistory.some(r => r.count > 0);
-        const maxContinue = getMaxContinueRetries(apiConfig.model);
-        const shortResponse = !fullText || fullText.length < 200;
-        if (hadToolCalls && shortResponse && continueRetries < maxContinue && roundHistory.length > 0 && !cancelToken.cancelled) {
-          continueRetries++;
-          // 使用 system 角色注入而非 user，避免污染对话记录
-          console.log(`[Agent Loop] 自动续推 (${continueRetries}/${maxContinue}): 模型输出过短(${fullText ? fullText.length : 0}字符)，继续推进`);
-          currentMessages.push({ role: 'user', content: '请继续执行之前的任务。' });
-          round++;
-          continue;
-        }
         sendToRenderer(mainWindow, 'agent-complete', {
           success: true,
           messages: currentMessages,
