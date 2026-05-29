@@ -137,7 +137,7 @@ AI 自动沉淀关键信息，跨对话持久化。
 | Agent 循环 | 多轮工具调用、流式输出、模型感知压缩、卡住检测 |
 | 思考级别 | 自动识别模型，注入对应 thinking/reasoning 参数 |
 | 文件操作 | Read / Write / Edit / Glob / Grep，支持文本 / .docx / .pdf / .xlsx / .csv，自动编码识别 |
-| Bash 执行 | 非阻塞 spawn，Git Bash / cmd 自动探测，支持取消、超时 |
+| Bash 执行 | 非阻塞 spawn，Git Bash / cmd 自动探测，支持取消、超时、危险命令拦截 |
 | 多模型 | 13+ 种模型，Anthropic + OpenAI + Google 三协议，视觉模型自动识别 |
 | MCP 集成 | stdio + HTTP/SSE 双模式，一键安装，自动重连 |
 | 集成终端 | Ctrl+` 切换，node-pty 真终端，可拖拽面板 |
@@ -194,20 +194,21 @@ MCP 配置：`%APPDATA%/cc-wrap/mcp-servers.json`
 ## 架构
 
 ```
-┌───────────────┐      IPC (contextBridge)       ┌──────────────────┐
-│  Main Process  │ ◄────────────────────────────► │ Renderer Process │
-│  (Node.js)     │      preload.js 白名单通道      │ (Chromium)       │
-│                │                                │                  │
-│  ├─ main.js    │                                │  ├─ app.js       │
-│  ├─ agent-loop │   terminal-output (push)       │  ├─ index.html   │
-│  ├─ api-client │   terminal-write (invoke)      │  ├─ main.css     │
-│  ├─ tools.js   │   terminal-spawn (invoke)      │  └─ xterm.js     │
-│  ├─ tool-exec  │   agent-stream-text (push)     │                  │
-│  ├─ mcp-client │   agent-permission (push)      │  终端面板         │
-│  ├─ system-prom│   ...                          │  └─ xterm.js     │
-│  ├─ logger.js  │                                │                  │
-│  └─ node-pty   │                                │                  │
-└───────────────┘                                └──────────────────┘
+┌───────────────┐      IPC (contextBridge)       ┌──────────────────────┐
+│  Main Process  │ ◄────────────────────────────► │ Renderer Process     │
+│  (Node.js)     │      preload.js 白名单通道      │ (Chromium)           │
+│                │                                │                      │
+│  ├─ main.js    │                                │  ├─ app.js (核心)     │
+│  ├─ agent-loop │   terminal-output (push)       │  ├─ editor.js        │
+│  ├─ api-client │   terminal-write (invoke)      │  ├─ terminal.js      │
+│  ├─ tools.js   │   terminal-spawn (invoke)      │  ├─ tasks.js         │
+│  ├─ tool-exec  │   agent-stream-text (push)     │  ├─ memory.js        │
+│  ├─ mcp-client │   agent-permission (push)      │  ├─ mcp.js           │
+│  ├─ system-prom│   ...                          │  ├─ skills.js        │
+│  ├─ logger.js  │                                │  ├─ index.html       │
+│  └─ node-pty   │                                │  ├─ main.css         │
+│                │                                │  └─ lib/xterm.js     │
+└───────────────┘                                └──────────────────────┘
 ```
 
 **安全**：`nodeIntegration: false`, `contextIsolation: true`，IPC 通道白名单化，CSP `default-src 'self'`。
@@ -244,9 +245,10 @@ MCP 配置：`%APPDATA%/cc-wrap/mcp-servers.json`
 npm start          # 开发模式
 npm run build      # 打包
 npm run rebuild    # 重新编译原生模块
+npm test           # 运行 Jest 单元测试
+npm run lint       # ESLint 代码检查
+npm run lint:fix   # 自动修复格式问题
 ```
-
-无自动化测试，冒烟测试通过 `npm start` 后手动验证。
 
 ---
 

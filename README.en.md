@@ -137,7 +137,7 @@ Inject domain knowledge into System Prompt for better AI understanding.
 | Agent loop | Multi-round tool calls, streaming output, model-aware compression, stuck detection |
 | Thinking level | Auto-detect model, inject correct thinking/reasoning parameters |
 | File ops | Read / Write / Edit / Glob / Grep, supports text / .docx / .pdf / .xlsx / .csv, auto encoding detection |
-| Bash execution | Non-blocking spawn, Git Bash / cmd auto-detect, cancel + timeout support |
+| Bash execution | Non-blocking spawn, Git Bash / cmd auto-detect, cancel + timeout, dangerous command filtering |
 | Multi-model | 13+ models, Anthropic + OpenAI + Google protocols, vision model auto-detect |
 | MCP integration | stdio + HTTP/SSE dual mode, one-click install, auto-reconnect |
 | Integrated terminal | Ctrl+` toggle, node-pty real terminal, draggable panel |
@@ -244,9 +244,10 @@ MCP config: `%APPDATA%/cc-wrap/mcp-servers.json`
 npm start          # Dev mode
 npm run build      # Package
 npm run rebuild    # Recompile native modules
+npm test           # Run Jest unit tests
+npm run lint       # ESLint code check
+npm run lint:fix   # Auto-fix formatting issues
 ```
-
-No automated testing. Verification via smoke-test with `npm start` then manual interaction.
 
 ---
 
