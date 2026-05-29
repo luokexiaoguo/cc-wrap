@@ -1099,7 +1099,7 @@ async function resolveGithubRepo(repo, userArgs) {
     }
 
     // 查找 pip 安装指令
-    const pipMatch = readme.match(/pip\s+(?:install)\s+([\w\-.\[\]]+)/i);
+    const pipMatch = readme.match(/pip\s+(?:install)\s+([\w\-.[\]]+)/i);
     if (pipMatch) {
       const pkgName = pipMatch[1];
       log.push(`从 README 检测到 pip 包: ${pkgName}`);

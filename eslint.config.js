@@ -24,6 +24,7 @@ module.exports = [
         clearInterval: 'readonly',
         setImmediate: 'readonly',
         URL: 'readonly',
+        URLSearchParams: 'readonly',
         TextDecoder: 'readonly',
         Uint8Array: 'readonly',
         Promise: 'readonly',
