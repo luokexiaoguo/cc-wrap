@@ -505,9 +505,41 @@ function detectWinShell() {
   return null;
 }
 
+// 危险命令黑名单（正则匹配，不区分大小写）
+const DANGEROUS_CMD_PATTERNS = [
+  { pattern: /\brm\s+(-[rf]+\s+)*\/(\s|$)/, desc: 'rm -rf /' },
+  { pattern: /\brm\s+(-[rf]+\s+)*\*/, desc: 'rm -rf *' },
+  { pattern: /\bmkfs\b/, desc: 'mkfs（格式化磁盘）' },
+  { pattern: />\s*\/dev\/sd[a-z]/, desc: '写入磁盘设备' },
+  { pattern: /\bdd\s+.*of=\/dev/, desc: 'dd 写入设备' },
+  { pattern: /\b(curl|wget)\s.*\|\s*(bash|sh|zsh)/, desc: 'curl | bash（远程代码执行）' },
+  { pattern: /\bchmod\s+(-R\s+)?777\s+\//, desc: 'chmod 777 /' },
+  { pattern: /\bshutdown\b/, desc: 'shutdown' },
+  { pattern: /\breboot\b/, desc: 'reboot' },
+  { pattern: /\binit\s+0/, desc: 'init 0' },
+  { pattern: /\b:()\s*\{\s*:\|:\s*&\s*\};/, desc: 'fork bomb' },
+  { pattern: /\bformat\s+[a-z]:/i, desc: 'format C:（Windows 格式化）' },
+  { pattern: /\bdel\s+\/[sfq]\s+[a-z]:\\\\/i, desc: 'del /s C:\\（Windows 删除）' },
+  { pattern: /\brd\s+\/s\s+\/q\s+[a-z]:\\\\/i, desc: 'rd /s C:\\（Windows 删除目录）' },
+];
+
+function checkDangerousCommand(command) {
+  const lower = command.toLowerCase();
+  for (const { pattern, desc } of DANGEROUS_CMD_PATTERNS) {
+    if (pattern.test(command) || pattern.test(lower)) {
+      return `危险命令已拦截: ${desc}\n原始命令: ${command}`;
+    }
+  }
+  return null;
+}
+
 function bash(input, ctx) {
   const { command, timeout = 120000 } = input;
   if (!command) return { error: 'command is required' };
+
+  // 危险命令过滤
+  const danger = checkDangerousCommand(command);
+  if (danger) return { error: danger };
 
   return new Promise((resolve) => {
     const isWin = process.platform === 'win32';

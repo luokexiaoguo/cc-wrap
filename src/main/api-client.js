@@ -125,8 +125,8 @@ function applyReasoningEffort(body, effort, isAnthropic) {
       body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
       return;
     }
-    // Gemini 3.x 用 thinkingLevel, 2.5 用 thinkingBudget
-    if (model.includes('gemini-3') || model.match(/gemini-\d+\.\d+/)) {
+    // Gemini 3.x 用 thinkingLevel, 2.5 及更早用 thinkingBudget
+    if (model.includes('gemini-3')) {
       body.generationConfig.thinkingConfig = { thinkingLevel: effort };
     } else {
       const budgetMap = { low: 1024, medium: 4096, high: 16384 };
