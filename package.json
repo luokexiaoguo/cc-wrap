@@ -1,0 +1,88 @@
+{
+  "name": "cc-wrap",
+  "version": "1.1.7-beta",
+  "description": "cc-wrap Desktop",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder build --win",
+    "build:mac": "electron-builder build --mac",
+    "rebuild": "electron-rebuild",
+    "test": "jest --verbose",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
+  },
+  "build": {
+    "appId": "com.ccwrap.desktop",
+    "productName": "cc-wrap",
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "icon.ico",
+      "icon.icns"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "icon.icns",
+      "artifactName": "${productName} Setup ${version}.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico",
+      "artifactName": "${productName} Setup ${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
+    "@eslint/js": "^10.0.1",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.13.3",
+    "eslint": "^10.4.0",
+    "eslint-config-prettier": "^10.1.8",
+    "jest": "^30.4.2",
+    "prettier": "^3.8.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "docx": "^9.6.1",
+    "electron-store": "^8.2.0",
+    "highlight.js": "^11.9.0",
+    "iconv-lite": "^0.6.3",
+    "node-pty": "^1.1.0",
+    "pdfjs-dist": "^4.0.379",
+    "screenshot-desktop": "^1.15.4",
+    "sharp": "^0.34.5",
+    "tree-kill": "^1.2.2",
+    "undici": "^8.3.0",
+    "xlsx": "^0.18.5",
+    "xterm": "^5.3.0"
+  }
+}
