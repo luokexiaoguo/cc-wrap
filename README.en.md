@@ -42,6 +42,9 @@ AI decides which tools to call, collaborating across multiple rounds to complete
 - Model-aware context compression (DeepSeek 500K, Gemini 200K, Claude 120K, default 80K)
 - Stuck detection: consecutive failures trigger strategy hints, preventing infinite loops
 - Smart tool result truncation to prevent context overflow
+- **3-Level Message Queue**: now (immediate), next (next round), later (background)
+- **Code Review 9 Stages**: Three-state verification (CONFIRMED/PLAUSIBLE/REFUTED)
+- **Coordinator Multi-Worker**: Parallel execution of multiple subtasks
 
 ### 🌐 Switch Between World-Class Models Freely
 
@@ -80,6 +83,8 @@ Supports [Model Context Protocol](https://modelcontextprotocol.io/) in two trans
 
 One-click MCP server installation with 5 transport modes: npm / pip / uvx / http / stdio.
 
+**MCP Tool Validation**: Auto-validates input parameters (required params, type checking) to prevent call failures.
+
 ### 💻 Integrated Terminal Panel
 
 `Ctrl+` ` to toggle, `node-pty` + `xterm.js`, VS Code-style experience:
@@ -110,6 +115,7 @@ Inject domain knowledge into System Prompt for better AI understanding.
 - Custom Skills (name + description + prompts + trigger keywords)
 - Always-active or keyword-triggered activation
 - Vendor onboarding: paste install steps, AI executes and registers the Skill
+- **5-second cache**: Avoids repeated loading, auto-clears on save
 
 ---
 
@@ -135,20 +141,23 @@ Inject domain knowledge into System Prompt for better AI understanding.
 | Feature | Description |
 |---------|-------------|
 | Agent loop | Multi-round tool calls, streaming output, model-aware compression, stuck detection |
-| Thinking level | Auto-detect model, inject correct thinking/reasoning parameters |
+| 3-Level message queue | now (immediate), next (next round), later (background tasks) |
+| Code Review | 9-stage review, three-state verification (CONFIRMED/PLAUSIBLE/REFUTED) |
+| Coordinator | Multi-worker parallel execution, task coordination |
+| Thinking level | Auto-detect model, inject correct thinking/reasoning parameters, toolbar quick switch |
 | File ops | Read / Write / Edit / Glob / Grep, supports text / .docx / .pdf / .xlsx / .csv, auto encoding detection |
 | Bash execution | Non-blocking spawn, Git Bash / cmd auto-detect, cancel + timeout, dangerous command filtering |
 | Multi-model | 13+ models, Anthropic + OpenAI + Google protocols, vision model auto-detect |
-| MCP integration | stdio + HTTP/SSE dual mode, one-click install, auto-reconnect |
+| MCP integration | stdio + HTTP/SSE dual mode, one-click install, auto-reconnect, input validation |
 | Integrated terminal | Ctrl+` toggle, node-pty real terminal, draggable panel |
 | Smart expansion | AskUserQuestion / Write / Edit auto-expand, others collapsed |
-| Task panel | Auto task breakdown, progress tracking |
+| Task panel | Auto task breakdown, progress tracking, state machine validation |
 | Memory system | Auto-extract + manual management, cross-conversation persistence |
-| Skills | Custom prompt injection, keyword / always-on activation modes |
+| Skills | Custom prompt injection, keyword / always-on activation modes, 5-second cache |
 | File editor | Syntax highlighting, line numbers, find/replace, Markdown preview, file tree |
 | Image recognition | Paste / drag auto-save, vision model + MCP tool dual path |
 | Dual theme | Claude warm dark + soft beige light, adjustable font size |
-| Bilingual | Instant language switching (Chinese / English) |
+| Bilingual | Instant language switching (Chinese / English, uses common terms like Base URL) |
 | Token stats | Per-message ↑↓ display, `/cost` for full conversation details, contribution heatmap |
 | Permission mgmt | Write / Edit / Bash modal confirmation, "always allow" persistence |
 | System tray | Minimize to tray, right-click menu for new / settings / show / hide |
@@ -204,7 +213,10 @@ MCP config: `%APPDATA%/cc-wrap/mcp-servers.json`
 │  ├─ tools.js   │   terminal-spawn (invoke)      │  └─ xterm.js     │
 │  ├─ tool-exec  │   agent-stream-text (push)     │                  │
 │  ├─ mcp-client │   agent-permission (push)      │  Terminal Panel   │
-│  ├─ system-prompt│  ...                          │  └─ xterm.js     │
+│  ├─ system-prom│   ...                          │  └─ xterm.js     │
+│  ├─ task-queue │                                │                  │
+│  ├─ code-review│                                │                  │
+│  ├─ coordinator│                                │                  │
 │  ├─ logger.js  │                                │                  │
 │  └─ node-pty   │                                │                  │
 └───────────────┘                                └──────────────────┘
@@ -224,6 +236,7 @@ MCP config: `%APPDATA%/cc-wrap/mcp-servers.json`
 | `conversations.json` | `%APPDATA%/cc-wrap/` |
 | `memory.json` | `%APPDATA%/cc-wrap/` |
 | `skills.json` | `%APPDATA%/cc-wrap/` |
+| `skills/<name>/SKILL.md` | `%APPDATA%/cc-wrap/skills/` |
 | `mcp-servers.json` | `%APPDATA%/cc-wrap/` |
 | `logs/app.log` | `%APPDATA%/cc-wrap/` |
 | `pasted-images/` | `%APPDATA%/cc-wrap/` |

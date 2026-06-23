@@ -54,16 +54,16 @@ var I18N = {
     globalConfig: 'Global Configuration', apiKeyLabel: 'Global API Key (used by Claude models)',
     defaultModel: 'Default Model', maxTokens: 'Max Tokens', temperature: 'Temperature', saveConfig: 'Save Configuration',
     addModel: 'Add Custom Model', modelName: 'Model Name', modelId: 'Model ID',
-    apiEndpoint: 'API Endpoint', apiKeyModel: 'API Key', modelPlaceholderKey: 'Model-specific key (optional)',
+    apiEndpoint: 'Base URL', apiKeyModel: 'API Key', modelPlaceholderKey: 'Model-specific key (optional)',
     addModelBtn: 'Add Model', addedModels: 'Added Models', noModels: 'No custom models',
     endpointDefault: 'default', keySet: 'Set', keyNotSet: 'Not set',
     editModel: 'Edit', deleteModel: 'Delete', confirmDelete: 'Are you sure you want to delete model',
     saved: 'Saved', added: 'Added', fillNameId: 'Please enter model name and ID',
-    reasoningEffort: 'Reasoning Effort', effortOff: 'Off', effortLow: 'Low', effortMedium: 'Medium', effortHigh: 'High',
+    reasoningEffort: 'Thinking', effortOff: 'Off', effortLow: 'Low', effortMedium: 'Medium', effortHigh: 'High',
     // Theme
     chooseTheme: 'Choose Theme', darkMode: 'Dark Mode', lightMode: 'Light Mode',
     // General
-    langLabel: 'Interface Language', workDir: 'Working Directory', selectDir: 'Select',
+    langLabel: 'Language', workDir: 'Working Directory', selectDir: 'Select',
     allowedTools: 'Allowed Tools',
     // Logs
     logs: 'Logs', logViewer: 'Log Viewer', logSearch: 'Search logs...',
@@ -821,6 +821,25 @@ function setupEvents() {
     modelSelect.onchange = function() {
       state.config.defaultModel = this.value;
       window.api.invoke('set-config', 'defaultModel', this.value);
+      // 切换模型时同步思考级别
+      syncReasoningEffortFromModel();
+    };
+  }
+
+  // 思考级别选择
+  var reasoningEffortSelect = $('reasoningEffortSelect');
+  if (reasoningEffortSelect) {
+    reasoningEffortSelect.onchange = function() {
+      var effort = this.value;
+      // 更新当前模型的思考级别
+      var modelId = state.config.defaultModel;
+      var modelIdx = state.models.findIndex(function(m) { return m.id === modelId || m.name === modelId; });
+      if (modelIdx >= 0) {
+        state.models[modelIdx].reasoningEffort = effort;
+        // 保存到配置
+        window.api.invoke('set-config', 'models', state.models);
+      }
+      updateReasoningEffortStyle(effort);
     };
   }
 
@@ -3580,13 +3599,7 @@ function renderSettingsTab(tab) {
       '<div class="form-group"><label>' + t('modelName') + '</label><input id="customModelName" placeholder="例如: MiniMax" /></div>' +
       '<div class="form-row"><div class="form-group"><label>' + t('modelId') + '</label><input id="customModelId" placeholder="例如: MiniMax-M2.7" /></div>' +
       '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="customModelEndpoint" placeholder="例如: https://api.minimaxi.com/anthropic" /></div></div>' +
-      '<div class="form-row"><div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="customModelMaxTokens" placeholder="默认 ' + (state.config.maxTokens || 8192) + '" /></div>' +
-      '<div class="form-group"><label>' + t('reasoningEffort') + '</label><select id="customModelReasoningEffort" style="width:100%;padding:6px;border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border)">' +
-        '<option value="off">' + t('effortOff') + '</option>' +
-        '<option value="low">' + t('effortLow') + '</option>' +
-        '<option value="medium">' + t('effortMedium') + '</option>' +
-        '<option value="high">' + t('effortHigh') + '</option>' +
-      '</select></div></div>' +
+      '<div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="customModelMaxTokens" placeholder="默认 ' + (state.config.maxTokens || 8192) + '" style="width:100%" /></div>' +
       '<div class="form-group"><label>' + t('temperature') + '</label><input type="range" id="customModelTemperature" min="0" max="2" step="0.05" value="' + (state.config.temperature ?? 0.7) + '" style="width:120px;vertical-align:middle" />' +
       ' <span id="customModelTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (state.config.temperature ?? 0.7) + '</span></div>' +
       '<div class="form-group"><label>' + t('apiKeyModel') + '</label><input type="password" id="customModelApiKey" placeholder="' + t('modelPlaceholderKey') + '" /></div>' +
@@ -3622,9 +3635,8 @@ function renderSettingsTab(tab) {
         var apiKey = $('customModelApiKey').value.trim();
         var modelMaxTokens = parseInt($('customModelMaxTokens').value) || undefined;
         var modelTemperature = parseFloat($('customModelTemperature').value);
-        var modelReasoningEffort = $('customModelReasoningEffort') ? $('customModelReasoningEffort').value : 'off';
         if (!name || !id) { showToast(t('fillNameId')); return; }
-        await window.api.invoke('add-model', { provider: 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: modelMaxTokens, temperature: modelTemperature, reasoningEffort: modelReasoningEffort });
+        await window.api.invoke('add-model', { provider: 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: modelMaxTokens, temperature: modelTemperature });
         state.config.models = await window.api.invoke('get-models');
         rebuildModelList();
         renderModelSelect(); renderModelList();
@@ -4050,13 +4062,7 @@ function openEditModelModal(idx) {
       '<div class="form-group"><label>' + t('modelId') + '</label><input id="editModelId" value="' + esc(m.id) + '" /></div>' +
       '<div class="form-group"><label>' + t('apiEndpoint') + '</label><input id="editModelEndpoint" value="' + esc(m.endpoint || '') + '" placeholder="https://api.example.com" /></div>' +
       '<div class="form-group"><label>' + t('apiKeyModel') + '</label><input type="password" id="editModelApiKey" value="' + esc(m.apiKey || '') + '" /></div>' +
-      '<div class="form-row"><div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="editModelMaxTokens" value="' + (m.maxTokens || '') + '" placeholder="默认" /></div>' +
-      '<div class="form-group"><label>' + t('reasoningEffort') + '</label><select id="editModelReasoningEffort" style="width:100%;padding:6px;border-radius:var(--radius-sm);background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border)">' +
-        '<option value="off"' + (m.reasoningEffort === 'off' || !m.reasoningEffort ? ' selected' : '') + '>' + t('effortOff') + '</option>' +
-        '<option value="low"' + (m.reasoningEffort === 'low' ? ' selected' : '') + '>' + t('effortLow') + '</option>' +
-        '<option value="medium"' + (m.reasoningEffort === 'medium' ? ' selected' : '') + '>' + t('effortMedium') + '</option>' +
-        '<option value="high"' + (m.reasoningEffort === 'high' ? ' selected' : '') + '>' + t('effortHigh') + '</option>' +
-      '</select></div></div>' +
+      '<div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="editModelMaxTokens" value="' + (m.maxTokens || '') + '" placeholder="默认" style="width:100%" /></div>' +
       '<div class="form-group"><label>' + t('temperature') + '</label><input type="range" id="editModelTemperature" min="0" max="2" step="0.05" value="' + (m.temperature ?? state.config.temperature ?? 0.7) + '" style="width:120px;vertical-align:middle" />' +
       ' <span id="editModelTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (m.temperature ?? state.config.temperature ?? 0.7) + '</span></div>' +
       '<div class="modal-actions">' +
@@ -4081,9 +4087,8 @@ function openEditModelModal(idx) {
 
     var editMaxTokens = parseInt($('editModelMaxTokens').value) || undefined;
     var editTemperature = parseFloat($('editModelTemperature').value);
-    var editReasoningEffort = $('editModelReasoningEffort') ? $('editModelReasoningEffort').value : 'off';
     var models = state.config.models.slice();
-    models[idx] = { provider: models[idx].provider || 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: editMaxTokens, temperature: editTemperature, reasoningEffort: editReasoningEffort };
+    models[idx] = { provider: models[idx].provider || 'custom', name: name, id: id, endpoint: endpoint, apiKey: apiKey, maxTokens: editMaxTokens, temperature: editTemperature, reasoningEffort: models[idx].reasoningEffort || 'off' };
     await window.api.invoke('set-config', 'models', models);
     state.config.models = models;
     rebuildModelList();
@@ -4101,6 +4106,27 @@ function openEditModelModal(idx) {
 
 // ========== Skills 系统（skills.js）==========
 
+// 思考级别工具函数
+function syncReasoningEffortFromModel() {
+  var modelId = state.config.defaultModel;
+  var model = state.models.find(function(m) { return m.id === modelId || m.name === modelId; });
+  var effort = (model && model.reasoningEffort) || 'off';
+  var select = $('reasoningEffortSelect');
+  if (select) {
+    select.value = effort;
+    updateReasoningEffortStyle(effort);
+  }
+}
+
+function updateReasoningEffortStyle(effort) {
+  var select = $('reasoningEffortSelect');
+  if (!select) return;
+  select.className = 'reasoning-effort-select';
+  if (effort && effort !== 'off') {
+    select.classList.add('active');
+  }
+}
+
 // 模型选择
 function renderModelSelect() {
   var select = $('modelSelect');
@@ -4112,6 +4138,8 @@ function renderModelSelect() {
   select.innerHTML = state.models.map(function(m) {
     return '<option value="' + m.id + '"' + (m.id === state.config.defaultModel ? ' selected' : '') + '>' + m.name + '</option>';
   }).join('');
+  // 同步思考级别
+  syncReasoningEffortFromModel();
 }
 
 // 启动

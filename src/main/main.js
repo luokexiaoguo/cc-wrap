@@ -1544,7 +1544,18 @@ ${conversationText}
     return out;
   }
 
-  function loadAllSkills() {
+  // Skills 缓存
+  let _skillsCache = null;
+  let _skillsCacheTime = 0;
+  const SKILLS_CACHE_TTL = 5000; // 5 秒缓存
+
+  function loadAllSkills(forceRefresh = false) {
+    const now = Date.now();
+    // 检查缓存是否有效
+    if (!forceRefresh && _skillsCache && (now - _skillsCacheTime) < SKILLS_CACHE_TTL) {
+      return _skillsCache;
+    }
+
     const userData = app.getPath('userData');
     // 1) JSON 来源（UI 编辑的，可写）
     let jsonSkills = [];
@@ -1569,7 +1580,12 @@ ${conversationText}
       if (!s || !s.name) return;
       map.set(s.name, s);
     });
-    return Array.from(map.values());
+
+    const result = Array.from(map.values());
+    // 更新缓存
+    _skillsCache = result;
+    _skillsCacheTime = now;
+    return result;
   }
 
   ipcMain.handle('get-skills', () => {
@@ -1632,6 +1648,9 @@ ${conversationText}
     } catch (err) {
       console.warn('[save-skills] 清理 cc-wrap 目录失败', err.message);
     }
+    // 清除 Skills 缓存
+    _skillsCache = null;
+    _skillsCacheTime = 0;
     return true;
   });
 

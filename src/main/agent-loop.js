@@ -9,6 +9,7 @@ const { getEnabledTools, mergeTools } = require('./tools');
 const { callAPIStream, shouldUseAnthropicFormat } = require('./api-client');
 const { executeTool, taskCompleteAll } = require('./tool-executor');
 const { COMPUTER_USE_TOOL_NAMES } = require('./computer-use');
+const { taskQueue, QueueType } = require('./task-queue');
 
 const PERMISSION_REQUIRED_TOOLS = ['Write', 'Edit', 'Bash', ...COMPUTER_USE_TOOL_NAMES];
 const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'ListDirectory', 'WebSearch', 'WebFetch', 'GetAgentResult', 'DiscoverMcp'];
@@ -642,26 +643,63 @@ async function compactMessages(mainWindow, messages, config, estimatedTokens) {
     return `${role}: ${content}`;
   }).join('\n---\n');
 
-  const summarizePrompt = `你是一个对话压缩助手。请将以下对话历史压缩为结构化摘要，严格按以下格式输出：
+  const summarizePrompt = `你是一个对话压缩助手。请将以下对话历史压缩为结构化摘要。
 
-## 用户目标
-（用户想要完成什么任务）
+在提供最终摘要前，请先在 <analysis> 标签中分析对话，确保覆盖所有要点：
 
-## 已执行的关键操作
-（按时间顺序列出重要的工具调用和结果，特别是：哪些文件被读取/修改/创建了，哪些命令被执行了，结果如何）
+1. 按时间顺序分析每条消息：
+   - 用户的明确请求和意图
+   - 你的应对方法
+   - 关键决策、技术概念、代码模式
+   - 具体细节：文件名、代码片段、函数签名、文件编辑
+   - 遇到的错误及修复方法
+   - 用户反馈（特别是纠正）
+   - 安全相关指令（必须原文保留）
 
-## 关键决策和结论
-（做出的重要选择、发现的错误、用户的偏好）
+2. 检查技术准确性和完整性
 
-## 当前状态
-（任务进展到哪一步了，还有什么未完成）
+然后按以下格式输出摘要：
+
+<summary>
+1. Primary Request and Intent:
+   [详细描述用户请求]
+
+2. Key Technical Concepts:
+   - [概念1]
+   - [概念2]
+
+3. Files and Code Sections:
+   - [文件名1]
+     - [为什么重要]
+     - [重要代码片段]
+
+4. Errors and fixes:
+   - [错误描述]:
+     - [修复方法]
+
+5. Problem Solving:
+   [已解决的问题]
+
+6. All user messages:
+   - [用户消息]
+   [保留安全相关指令原文]
+
+7. Pending Tasks:
+   - [待办任务]
+
+8. Work Completed:
+   [已完成工作]
+
+9. Context for Continuing Work:
+   [继续工作所需的关键上下文]
+</summary>
 
 要求：
 - 保留所有文件路径和变量名等技术细节
 - 保留错误信息和失败原因
 - 保留用户明确表达的偏好
-- 总长度控制在 500 字以内
-- 不要丢失任何可能影响后续操作的信息
+- 安全相关指令必须原文保留
+- 总长度控制在 800 字以内
 
 ---
 
@@ -781,4 +819,4 @@ function cancelAgentLoop(loopId) {
   return false;
 }
 
-module.exports = { runAgentLoop, cancelAgentLoop, setPersistenceStore };
+module.exports = { runAgentLoop, cancelAgentLoop, setPersistenceStore, taskQueue };

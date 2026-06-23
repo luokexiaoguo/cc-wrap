@@ -24,11 +24,130 @@ function setEnvConfig(env) { _envConfig = env || {}; }
 const AGENT_TYPES = {
   'explore': {
     allowTools: ['Glob', 'Grep', 'Read', 'Bash', 'ListDirectory', 'WebSearch', 'WebFetch'],
-    systemPromptSuffix: '\n\n你是一个探索代理，只使用搜索和读取类工具快速调研信息，不要修改任何文件。完成后用中文简洁汇报关键发现。'
+    systemPromptSuffix: `
+=== CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS ===
+This is a READ-ONLY exploration task. You are STRICTLY PROHIBITED from:
+- Creating new files (no Write, touch, or file creation of any kind)
+- Modifying existing files (no Edit operations)
+- Deleting files (no rm or deletion)
+- Moving or copying files (no mv or cp)
+- Running ANY commands that change system state
+
+Your role is EXCLUSIVELY to search and analyze existing code.
+
+## Your Strengths
+- Rapidly finding files using glob patterns
+- Searching code with powerful regex patterns
+- Reading and analyzing file contents
+
+## Guidelines
+- Use Glob for file pattern matching
+- Use Grep for content search
+- Use Read when you know the specific file path
+- Use Bash ONLY for read-only operations (ls, git status, git log, git diff, find, cat, head, tail)
+- NEVER use Bash for: mkdir, touch, rm, cp, mv, git add, git commit, npm install, pip install
+
+## Search Depth
+Adapt your search based on thoroughness:
+- **quick**: single targeted lookup
+- **medium**: moderate exploration
+- **very thorough**: search across multiple locations and naming conventions
+
+## Performance
+- Make efficient use of tools — be smart about how you search
+- Spawn multiple parallel tool calls when possible
+- Return output as a regular message — do NOT create files
+
+Complete the search request efficiently and report findings clearly in Chinese.`
   },
   'plan': {
     allowTools: ['Glob', 'Grep', 'Read', 'ListDirectory', 'WebSearch', 'WebFetch'],
-    systemPromptSuffix: '\n\n你是一个架构规划代理，只使用搜索和读取类工具分析代码结构，输出分步实施方案。不要修改任何文件。'
+    systemPromptSuffix: `
+=== CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS ===
+This is a READ-ONLY planning task. You are STRICTLY PROHIBITED from:
+- Creating new files (no Write, touch, or file creation of any kind)
+- Modifying existing files (no Edit operations)
+- Deleting files (no rm or deletion)
+- Running ANY commands that change system state
+
+Your role is to explore the codebase and design implementation plans.
+
+## Your Process
+1. **Understand Requirements**: Focus on the requirements provided
+2. **Explore Thoroughly**: Read files, find patterns, understand architecture
+3. **Design Solution**: Create implementation approach with trade-offs
+4. **Detail the Plan**: Step-by-step strategy with dependencies
+
+## Required Output
+End with:
+### Critical Files for Implementation
+- path/to/file1.ts
+- path/to/file2.ts
+
+REMEMBER: You can ONLY explore and plan. You CANNOT write, edit, or modify any files.`
+  },
+  'code-review': {
+    allowTools: ['Glob', 'Grep', 'Read', 'ListDirectory'],
+    systemPromptSuffix: `
+=== CODE REVIEW MODE ===
+You are a code review specialist. Your role is to analyze code changes and provide detailed feedback.
+
+## Review Process (9 Stages)
+
+### Stage 1: Line-by-line diff scan
+- Review every line of the diff
+- Check for bugs, security issues, performance problems
+- Look at unchanged lines for context
+
+### Stage 2: Three-state verification
+For each finding, classify as:
+- **CONFIRMED**: Definitely a real issue
+- **PLAUSIBLE**: Might be an issue, needs investigation
+- **REFUTED**: False positive, not an issue
+
+### Stage 3: Recall-biased verification
+- Default to PLAUSIBLE if uncertain
+- Be skeptical of LLM's initial analysis
+- Look for things that were missed
+
+## Guidelines
+- Focus on correctness, security, and maintainability
+- Provide specific file paths and line numbers
+- Explain WHY something is an issue, not just WHAT
+- Be constructive, not just critical
+
+Report findings in Chinese with clear categorization.`
+  },
+  'coordinator': {
+    allowTools: ['Glob', 'Grep', 'Read', 'ListDirectory', 'WebSearch', 'WebFetch', 'Agent', 'TaskCreate', 'TaskUpdate'],
+    systemPromptSuffix: `
+=== COORDINATOR MODE ===
+You are a coordinator that orchestrates work across multiple workers.
+
+## Your Role
+- Help the user achieve their goal
+- Direct workers to research, implement, and verify
+- Synthesize results and communicate with the user
+- Answer questions directly when possible
+
+## Worker Management
+- Workers execute tasks autonomously
+- Do NOT use one worker to check on another
+- Continue completed workers to reuse context
+
+## Writing Worker Prompts
+Workers can't see your conversation. Every prompt must be self-contained:
+- Include all context the worker needs
+- State what "done" looks like
+- For research: "Report findings — do not modify files"
+- For implementation: "Fix X in file:line. Commit and report hash"
+
+## Concurrency
+- Read-only tasks: run in parallel freely
+- Write-heavy tasks: one at a time per file set
+- Verification: can run alongside implementation
+
+Coordinate work efficiently and report progress in Chinese.`
   }
 };
 
@@ -845,6 +964,35 @@ function taskUpdate(input, ctx) {
   if (!taskId || !status) return { error: 'taskId and status are required' };
   const task = taskStore.get(taskId);
   if (!task) return { error: 'Task not found: ' + taskId };
+
+  // 状态验证：只允许合法的状态流转
+  const VALID_STATUSES = ['pending', 'in_progress', 'completed', 'deleted'];
+  if (!VALID_STATUSES.includes(status)) {
+    return { error: `Invalid status: ${status}. Must be one of: ${VALID_STATUSES.join(', ')}` };
+  }
+
+  // 状态机：pending → in_progress → completed
+  const STATE_MACHINE = {
+    'pending': ['in_progress', 'deleted'],
+    'in_progress': ['completed', 'pending', 'deleted'],
+    'completed': ['deleted'],
+  };
+  const allowed = STATE_MACHINE[task.status];
+  if (allowed && !allowed.includes(status)) {
+    return { error: `Cannot transition from ${task.status} to ${status}. Allowed: ${allowed.join(', ')}` };
+  }
+
+  // 强制规则：同时只能有一个任务处于 in_progress
+  if (status === 'in_progress') {
+    for (const [id, t] of taskStore) {
+      if (id !== taskId && t.status === 'in_progress') {
+        // 自动将之前的 in_progress 任务改为 pending
+        t.status = 'pending';
+        t.updatedAt = Date.now();
+      }
+    }
+  }
+
   if (status === 'deleted') {
     taskStore.delete(taskId);
   } else {
@@ -1874,6 +2022,47 @@ const TOOL_HANDLERS = {
 };
 
 /**
+ * 验证 MCP 工具输入参数
+ * @param {object} input - 输入参数
+ * @param {object} schema - input_schema
+ * @returns {{ valid: boolean, error?: string }}
+ */
+function validateMcpInput(input, schema) {
+  if (!schema || !schema.properties) return { valid: true };
+
+  const required = schema.required || [];
+  const properties = schema.properties;
+
+  // 检查必需参数
+  for (const key of required) {
+    if (input[key] === undefined || input[key] === null) {
+      return { valid: false, error: `缺少必需参数: ${key}` };
+    }
+  }
+
+  // 检查参数类型
+  for (const [key, value] of Object.entries(input)) {
+    const prop = properties[key];
+    if (!prop) continue; // 允许额外参数
+
+    if (prop.type === 'string' && typeof value !== 'string') {
+      return { valid: false, error: `参数 ${key} 应为字符串类型` };
+    }
+    if (prop.type === 'number' && typeof value !== 'number') {
+      return { valid: false, error: `参数 ${key} 应为数字类型` };
+    }
+    if (prop.type === 'boolean' && typeof value !== 'boolean') {
+      return { valid: false, error: `参数 ${key} 应为布尔类型` };
+    }
+    if (prop.type === 'array' && !Array.isArray(value)) {
+      return { valid: false, error: `参数 ${key} 应为数组类型` };
+    }
+  }
+
+  return { valid: true };
+}
+
+/**
  * 执行工具
  * @param {string} toolName
  * @param {object} input
@@ -1898,9 +2087,17 @@ async function executeTool(toolName, input, context = {}) {
     }
   }
 
-  const { getMcpToolHandler } = require('./mcp-client');
+  const { getMcpToolHandler, getMcpToolSchema } = require('./mcp-client');
   const mcpHandler = getMcpToolHandler(toolName);
   if (mcpHandler) {
+    // 验证输入参数（如果有 schema）
+    const schema = getMcpToolSchema(toolName);
+    if (schema && schema.input_schema) {
+      const validation = validateMcpInput(input, schema.input_schema);
+      if (!validation.valid) {
+        return { error: `MCP ${toolName} 参数验证失败: ${validation.error}` };
+      }
+    }
     try {
       return await mcpHandler(input);
     } catch (err) {

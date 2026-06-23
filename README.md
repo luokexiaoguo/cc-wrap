@@ -42,6 +42,9 @@ AI 自主决定调用哪些工具，多轮协作完成任务。
 - 模型感知的上下文压缩（DeepSeek 500K、Gemini 200K、Claude 120K、默认 80K）
 - 卡住检测：连续失败自动提示模型换策略，避免死循环
 - 工具结果智能截断，防止撑爆上下文
+- **3 级消息队列**：now（立即处理）、next（下一轮）、later（后台任务）
+- **Code Review 9 阶段**：三态验证（CONFIRMED/PLAUSIBLE/REFUTED）
+- **Coordinator 多 Worker**：并行执行多个子任务
 
 ### 🌐 全球主流模型自由切换
 
@@ -80,6 +83,8 @@ AI 自主决定调用哪些工具，多轮协作完成任务。
 
 一键安装 MCP 服务器，支持 npm / pip / uvx / http / stdio 五种安装方式。
 
+**MCP 工具验证**：自动验证输入参数（必需参数、类型检查），防止调用失败。
+
 ### 💻 集成终端面板
 
 `` Ctrl+` `` 弹出，`node-pty` + `xterm.js`，体验对标 VS Code：
@@ -110,6 +115,7 @@ AI 自动沉淀关键信息，跨对话持久化。
 - 自定义 Skill（名称 + 描述 + 提示词 + 触发关键词）
 - 始终激活或关键词自动触发
 - vendor onboarding 一键安装：粘贴安装步骤，AI 自动执行并注册 Skill
+- **5 秒缓存**：避免重复加载，保存后自动清除缓存
 
 ---
 
@@ -135,20 +141,23 @@ AI 自动沉淀关键信息，跨对话持久化。
 | 功能 | 说明 |
 |------|------|
 | Agent 循环 | 多轮工具调用、流式输出、模型感知压缩、卡住检测 |
-| 思考级别 | 自动识别模型，注入对应 thinking/reasoning 参数 |
+| 3 级消息队列 | now（立即处理）、next（下一轮）、later（后台任务） |
+| Code Review | 9 阶段审查，三态验证（CONFIRMED/PLAUSIBLE/REFUTED） |
+| Coordinator | 多 Worker 并行执行，任务协调 |
+| 思考级别 | 自动识别模型，注入对应 thinking/reasoning 参数，工具栏快捷切换 |
 | 文件操作 | Read / Write / Edit / Glob / Grep，支持文本 / .docx / .pdf / .xlsx / .csv，自动编码识别 |
 | Bash 执行 | 非阻塞 spawn，Git Bash / cmd 自动探测，支持取消、超时、危险命令拦截 |
 | 多模型 | 13+ 种模型，Anthropic + OpenAI + Google 三协议，视觉模型自动识别 |
-| MCP 集成 | stdio + HTTP/SSE 双模式，一键安装，自动重连 |
+| MCP 集成 | stdio + HTTP/SSE 双模式，一键安装，自动重连，输入参数验证 |
 | 集成终端 | Ctrl+` 切换，node-pty 真终端，可拖拽面板 |
 | 智能展开 | AskUserQuestion / Write / Edit 自动展开，其他折叠 |
-| 任务面板 | 自动任务拆解，进度追踪 |
+| 任务面板 | 自动任务拆解，进度追踪，状态机验证 |
 | 记忆系统 | 自动提取 + 手动管理，跨对话持久化 |
-| Skills | 自定义提示词注入，关键词 / 始终两种激活模式 |
+| Skills | 自定义提示词注入，关键词 / 始终两种激活模式，5 秒缓存 |
 | 文件编辑器 | 语法高亮、行号、查找替换、Markdown 预览、文件树 |
 | 图片识别 | 粘贴 / 拖拽自动落盘，视觉模型 / MCP 工具双路径 |
 | 双主题 | Claude 暖调深色 + 柔米色浅色，字体大小可调 |
-| 中英文双语 | 界面语言即时切换 |
+| 中英文双语 | 界面语言即时切换（英语使用通用术语如 Base URL） |
 | Token 统计 | 每条消息 ↑↓ 显示，`/cost` 查看全部对话明细，贡献热力图 |
 | 权限管理 | Write / Edit / Bash 弹窗确认，支持「始终允许」持久化 |
 | 系统托盘 | 关闭最小化，右键菜单新建 / 设置 / 显示 / 隐藏 |
@@ -205,9 +214,11 @@ MCP 配置：`%APPDATA%/cc-wrap/mcp-servers.json`
 │  ├─ tool-exec  │   agent-stream-text (push)     │  ├─ memory.js        │
 │  ├─ mcp-client │   agent-permission (push)      │  ├─ mcp.js           │
 │  ├─ system-prom│   ...                          │  ├─ skills.js        │
-│  ├─ logger.js  │                                │  ├─ index.html       │
-│  └─ node-pty   │                                │  ├─ main.css         │
-│                │                                │  └─ lib/xterm.js     │
+│  ├─ task-queue │                                │  ├─ index.html       │
+│  ├─ code-review│                                │  ├─ main.css         │
+│  ├─ coordinator│                                │  └─ lib/xterm.js     │
+│  ├─ logger.js  │                                │                      │
+│  └─ node-pty   │                                │                      │
 └───────────────┘                                └──────────────────────┘
 ```
 
@@ -225,6 +236,7 @@ MCP 配置：`%APPDATA%/cc-wrap/mcp-servers.json`
 | `conversations.json` | `%APPDATA%/cc-wrap/` |
 | `memory.json` | `%APPDATA%/cc-wrap/` |
 | `skills.json` | `%APPDATA%/cc-wrap/` |
+| `skills/<name>/SKILL.md` | `%APPDATA%/cc-wrap/skills/` |
 | `mcp-servers.json` | `%APPDATA%/cc-wrap/` |
 | `logs/app.log` | `%APPDATA%/cc-wrap/` |
 | `pasted-images/` | `%APPDATA%/cc-wrap/` |

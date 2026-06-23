@@ -142,7 +142,42 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'TaskCreate',
-    description: 'Create a task to track work progress. Tasks appear in the user-visible task panel at the top of the chat. Use this for ANY non-trivial task (3+ steps) to give the user visibility into what you\'re doing. Create tasks BEFORE starting work, then update their status as you progress.',
+    description: `Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+
+## When to Use This Tool
+Use this tool proactively in these scenarios:
+
+1. Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
+2. Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
+3. User explicitly requests todo list - When the user directly asks you to use the task list
+4. User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
+5. After receiving new instructions - Immediately capture user requirements as tasks
+6. When you start working on a task - Mark it as in_progress BEFORE beginning work. Ideally you should only have one task as in_progress at a time
+7. After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
+
+## When NOT to Use This Tool
+Skip using this tool when:
+1. There is only a single, straightforward task
+2. The task is trivial and tracking it provides no organizational benefit
+3. The task can be completed in less than 3 trivial steps
+4. The task is purely conversational or informational
+
+## Task States (Enforced State Machine)
+- **pending**: Task not yet started
+- **in_progress**: Currently working on (MUST limit to ONE task at a time)
+- **completed**: Task finished successfully
+
+## Critical Rules
+1. **MUST** mark in_progress BEFORE starting work
+2. **MUST** mark completed IMMEDIATELY after finishing (not batch)
+3. **Exactly ONE** task must be in_progress at any time
+4. Complete current tasks before starting new ones
+5. NEVER mark completed if: tests failing, implementation partial, unresolved errors
+
+## Task Description Requirements
+Task descriptions must have two forms:
+- subject: The imperative form ("Run tests", "Fix bug")
+- description: Optional detailed description with acceptance criteria`,
     input_schema: {
       type: 'object',
       properties: {
@@ -154,12 +189,30 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'TaskUpdate',
-    description: 'Update the status of a previously created task. Mark as "in_progress" when you start working on it, "completed" when done, or "deleted" if no longer needed. The task panel updates in real-time for the user.',
+    description: `Update the status of a previously created task. The task panel updates in real-time for the user.
+
+## State Machine (Enforced)
+- pending → in_progress → completed
+- in_progress → pending (if blocked)
+- Any → deleted
+
+## Critical Rules
+1. Mark in_progress BEFORE starting work on the task
+2. Mark completed IMMEDIATELY after finishing
+3. Exactly ONE task must be in_progress at any time (system auto-pauses others)
+4. NEVER mark completed if:
+   - Tests are failing
+   - Implementation is partial
+   - You encountered unresolved errors
+   - You couldn't find necessary files
+
+## When Blocked
+If you cannot continue, keep the task as in_progress and create a NEW task describing what needs to be resolved.`,
     input_schema: {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'The ID of the task to update (returned by TaskCreate).' },
-        status: { type: 'string', enum: ['in_progress', 'completed', 'deleted'], description: 'New status: "in_progress" = currently working on it, "completed" = done, "deleted" = no longer needed.' }
+        status: { type: 'string', enum: ['in_progress', 'completed', 'pending', 'deleted'], description: 'New status: "in_progress" = currently working on it, "completed" = done, "pending" = not started or blocked, "deleted" = no longer needed.' }
       },
       required: ['taskId', 'status']
     }

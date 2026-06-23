@@ -47,6 +47,31 @@ Terminal IPC channels (node-pty):
 6. Context compression triggers at >80K tokens (progressive: 80–100K keep 8, 100–120K keep 6, 120–150K keep 4, 150K+ keep 2 recent messages; also preserves text-containing assistant messages beyond the window)
 7. **效率优化**: 工具结果普通 1500/错误 600 字符截断；滑动窗口检测卡住（最近 8 轮中 >=3 轮失败且 >=50% 失败率）时注入策略提示
 
+### 3 级消息队列 (`src/main/task-queue.js`)
+
+借鉴 Claude Code 架构的调度系统：
+- **now 队列**: 立即处理用户消息、工具结果
+- **next 队列**: 下一轮处理计划的任务
+- **later 队列**: 后台任务（定时器驱动）
+
+任务状态：`pending → running → completed/failed/blocked`。通过 `taskQueue.enqueue(task, queueType)` 入队，`processNext()` 自动处理。
+
+### Code Review 9 阶段 (`src/main/code-review.js`)
+
+代码审查系统，支持三态验证：
+- Stage 1: 逐行 diff 扫描
+- Stage 4: 三态验证 (CONFIRMED/PLAUSIBLE/REFUTED)
+- Stage 5: 反漏看验证
+
+检测模式：eval()、innerHTML、空 catch、敏感信息泄漏等。
+
+### Coordinator 多 Worker (`src/main/coordinator.js`)
+
+多 Worker 并行执行系统：
+- Worker 生命周期：idle → running → completed/failed/stopped
+- 支持 spawn、stop、continue 操作
+- 并发执行多个 Worker
+
 **Write/Edit/Bash require user approval** via an IPC permission modal. `alwaysAllowedTools` Set is now **persisted to `config.json`** (not session-only) — `agent-loop.setPersistenceStore(store)` is called from `main.js` to inject the store, and "always allow" choices write through.
 
 **executeTool context object**: `{ workDir, shell, signal, window, apiConfig, toolCallId }`. Tools use `workDir` to resolve relative paths, `signal` to bail on cancel, `window` to push IPC events back (e.g. `taskCreate`/`taskUpdate` emit `tasks-changed`), `apiConfig` for model/temperature/reasoningEffort, `toolCallId` for sub-agent routing.
@@ -75,7 +100,13 @@ All API fetches have a 120s timeout. Proxy is auto-configured from `HTTPS_PROXY`
 
 **AskUserQuestion** is a special tool that pauses the agent loop to ask the user a multiple-choice question. The handler in `tool-executor.js` sends an `agent-question` IPC to the renderer, then returns a Promise that resolves when the user responds via `agent-question-response` IPC. The renderer (`app.js`) listens for `agent-question`, finds the last running `AskUserQuestion` tool card in the DOM, and injects a `.tool-call-question` div with option buttons + "Other..." text input. On selection, it sends the answer back via `window.api.send('agent-question-response', requestId, answer)`. The handler supports cancellation via `ctx.signal` and a 10-minute timeout. IPC channels: `agent-question` (ON_CHANNELS) + `agent-question-response` (SEND_CHANNELS).
 
-**Agent type system**: `AGENT_TYPES` in `tool-executor.js` defines named agent profiles (`explore`, `plan`, `general-purpose`) with `allowTools` filtering and `systemPromptSuffix`. The `explore` type only allows search/read tools; `plan` is similar but focused on architecture analysis. Sub-agents spawned by the `Agent` tool inherit their type's constraints.
+**Agent type system**: `AGENT_TYPES` in `tool-executor.js` defines named agent profiles with `allowTools` filtering and `systemPromptSuffix`:
+- `explore`: READ-ONLY, search/read tools only, fast research
+- `plan`: READ-ONLY, architecture analysis
+- `code-review`: 代码审查 9 阶段，三态验证
+- `coordinator`: 多 Worker 协调，支持并行执行
+
+Sub-agents spawned by the `Agent` tool inherit their type's constraints.
 
 **Background agents**: When `Agent` tool is called with `run_in_background: true`, the sub-agent runs independently without blocking the parent loop. Background agents don't receive `ctx.window` (prevents flash-crash from stale window references). Results are polled via `GetAgentResult` tool which checks `backgroundAgents` Map by taskId.
 
@@ -94,12 +125,14 @@ Hooks `console.log/error/warn` to write both to terminal and a file. `initLogger
 ### Settings tabs
 
 Settings modal has tabs (`data-stab`): `api`, `theme`, `general`, `logs`, `tokens`, `about`.
-- **api** — global API config, temperature slider (0–2), model add/edit forms with per-model temperature + maxTokens + reasoningEffort (off/low/medium/high)
+- **api** — global API config, temperature slider (0–2), model add/edit forms with per-model temperature + maxTokens
 - **theme** — dark/light toggle, font size slider
 - **general** — language, work directory, custom system prompt, always-allowed tools, auto-save, cache clear
 - **logs** — search (300ms debounce), refresh, clear, export buttons, `<pre>` viewer
 - **tokens** — GitHub-style contribution heatmap aggregating daily token usage from `conversations.json`
 - **about** — app version, GitHub link via `open-external` IPC
+
+**工具栏思考级别按钮**: `#reasoningEffortSelect` 下拉菜单位于模型选择器旁边，支持 4 个级别（关/低/中/高）。切换模型时自动同步该模型的思考级别。
 
 ### MCP client (`src/main/mcp-client.js`)
 
@@ -107,13 +140,17 @@ JSON-RPC 2.0 客户端，支持两种传输模式（自动检测）：
 - **stdio**: spawn 子进程，通过 stdin/stdout 通信（传统本地 MCP 服务器）
 - **HTTP/SSE**: `command` 以 `http://` 或 `https://` 开头时自动切换为 HTTP 模式，支持 POST-only（如 Tavily）和 GET+endpoint（标准 Streamable HTTP）两种子协议
 
-`McpClient` class handles: connect, initialize handshake, tools/list, tools/call, auto-reconnect (2 retries). Global management via `connectAllServers()`, `getAllMcpTools()`, `getMcpToolHandler()`. App auto-connects configured servers 2 seconds after startup. `before-quit` cleans up all connections.
+`McpClient` class handles: connect, initialize handshake, tools/list, tools/call, auto-reconnect (2 retries). Global management via `connectAllServers()`, `getAllMcpTools()`, `getMcpToolHandler()`, `getMcpToolSchema()`. App auto-connects configured servers 2 seconds after startup. `before-quit` cleans up all connections.
+
+**MCP 工具验证**: `executeTool()` 会调用 `getMcpToolSchema()` 获取工具 schema，然后用 `validateMcpInput()` 验证输入参数（必需参数、类型检查）。
 
 **注意**: `add-mcp-from-url` IPC 处理器在 `main.js` 中会先探测 URL 是否为 HTTP MCP 端点（检查响应 Content-Type），如果是则自动添加，否则回退到 HTML 页面解析 `mcpServers` 配置。
 
 ### System Prompt (`src/main/system-prompt.js`)
 
 Composition order (later overrides earlier semantically): base Claude Code identity prompt → working-directory CLAUDE.md (searches `./CLAUDE.md` then `.claude/CLAUDE.md`) → memories list → active Skills content → user's `customSystemPrompt` from config. Base prompt explicitly instructs the model to use TaskCreate/TaskUpdate for non-trivial tasks (≥3 steps) so the user-visible task panel populates.
+
+**对话压缩**: 使用 `<analysis>` 标签组织思路，然后输出结构化摘要（9 个必需部分：Primary Request、Key Technical Concepts、Files and Code Sections、Errors and fixes、Problem Solving、All user messages、Pending Tasks、Work Completed、Context for Continuing Work）。
 
 ### Renderer architecture (`src/renderer/app.js`)
 
@@ -169,7 +206,7 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 - **`logs/app.log`** — rolling log file from `logger.js` (5MB rotation).
 - **`memory.json`** — user memories (manual + auto-extracted)
 - **`skills.json`** — Skills metadata (name, description, triggers, alwaysActive; 磁盘 SKILL.md 内容优先级更高)
-- **`skills/<name>/SKILL.md`** — Skill 的 SKILL.md 正文文件，InstallSkill 写入位置，优先级高于 skills.json 中的 content
+- **`skills/<name>/SKILL.md`** — Skill 的 SKILL.md 正文文件，InstallSkill 写入位置，优先级高于 skills.json 中的 content。Skills 有 5 秒缓存 TTL，保存后自动清除缓存。
 - **`mcp-servers.json`** — MCP server configs (NOT in electron-store; raw JSON read/written by `get-mcp-servers` / `save-mcp-servers` IPC handlers in main.js)
 - **`pasted-images/<timestamp>.png`** — when user pastes/drops an image, it's also written to disk (`save-pasted-image` IPC) so MCP tools that accept a file path (`understand_image`, etc.) get a real path. The path is appended to the user's text as a hint in `buildApiMessages`.
 

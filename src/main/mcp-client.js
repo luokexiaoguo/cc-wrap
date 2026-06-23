@@ -589,6 +589,21 @@ function getMcpToolHandler(toolName) {
 }
 
 /**
+ * 获取 MCP 工具的 schema
+ */
+function getMcpToolSchema(toolName) {
+  for (const [serverName, client] of clients) {
+    if (client.connected) {
+      const toolDef = client.tools.find((t) => t.name === toolName);
+      if (toolDef) {
+        return toolDef;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * 获取连接状态
  */
 function getServerStatuses() {
@@ -626,6 +641,7 @@ module.exports = {
   connectAllServers,
   getAllMcpTools,
   getMcpToolHandler,
+  getMcpToolSchema,
   getServerStatuses,
   closeAll,
   getClient,
