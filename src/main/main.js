@@ -125,7 +125,7 @@ function startFileWatcher(dir) {
 }
 
 function stopFileWatcher() {
-  if (fileWatcher) { try { fileWatcher.close(); } catch (_) {} fileWatcher = null; }
+  if (fileWatcher) { try { fileWatcher.close(); } catch (e) { console.warn('[fileWatcher] close failed:', e.message); } fileWatcher = null; }
   if (fileWatchTimer) { clearInterval(fileWatchTimer); fileWatchTimer = null; }
 }
 
@@ -1916,7 +1916,7 @@ app.on('before-quit', () => {
   app.isQuitting = true;
   stopFileWatcher();
   try { mcp.closeAll(); } catch (e) { console.error('[MCP] 退出清理失败:', e.message); }
-  for (const [, pty] of terminals) { try { pty.kill(); } catch (_) {} }
+  for (const [, pty] of terminals) { try { pty.kill(); } catch (e) { console.warn('[pty] kill failed:', e.message); } }
   terminals.clear();
-  try { require('./tool-executor').clearBackgroundAgents(); } catch (_) {}
+  try { require('./tool-executor').clearBackgroundAgents(); } catch (e) { console.warn('[agent] clear failed:', e.message); }
 });

@@ -30,12 +30,12 @@ function setPersistenceStore(store) {
   try {
     const persisted = store.get('alwaysAllowedTools', []);
     if (Array.isArray(persisted)) persisted.forEach((t) => alwaysAllowedTools.add(t));
-  } catch (_) {}
+  } catch (e) { console.warn('[agent-loop] load alwaysAllowedTools failed:', e.message); }
 }
 
 function _persistAlwaysAllowed() {
   if (!_storeRef) return;
-  try { _storeRef.set('alwaysAllowedTools', Array.from(alwaysAllowedTools)); } catch (_) {}
+  try { _storeRef.set('alwaysAllowedTools', Array.from(alwaysAllowedTools)); } catch (e) { console.warn('[agent-loop] save alwaysAllowedTools failed:', e.message); }
 }
 
 /**

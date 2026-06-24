@@ -946,7 +946,7 @@ function emitTasksChanged(ctx) {
     if (ctx && ctx.window && !ctx.window.isDestroyed()) {
       ctx.window.webContents.send('tasks-changed', list);
     }
-  } catch (_) {}
+  } catch (e) { console.warn('[task] emitTasksChanged failed:', e.message); }
 }
 
 function taskCreate(input, ctx) {
