@@ -503,7 +503,12 @@ app.whenReady().then(() => {
   // 读文件为 data URL（用于编辑器的图片预览）
   ipcMain.handle('read-file-as-data-url', (event, filePath) => {
     try {
-      const buf = fs.readFileSync(filePath);
+      // 转换 Git Bash 风格路径 (/e/...) 到 Windows 风格 (E:\...)
+      let normalizedPath = filePath;
+      if (process.platform === 'win32' && /^\/[a-zA-Z]\//.test(filePath)) {
+        normalizedPath = filePath.charAt(1).toUpperCase() + ':' + filePath.slice(2).replace(/\//g, '\\');
+      }
+      const buf = fs.readFileSync(normalizedPath);
       const ext = path.extname(filePath).slice(1).toLowerCase();
       const mimeMap = {
         png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',

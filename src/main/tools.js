@@ -252,11 +252,12 @@ If you cannot continue, keep the task as in_progress and create a NEW task descr
   },
   {
     name: 'DiscoverMcp',
-    description: 'Scan the local system for existing MCP server configurations from various sources: Claude Desktop config, globally installed npm/pip packages that are MCP servers, cc-wrap own config, and PATH tools with MCP subcommands. Returns a structured report of what was found and where, so the AI can offer to import them via InstallMcp.',
+    description: 'Scan the local system for existing MCP server configurations from various sources: Claude Desktop config, globally installed npm/pip packages, cc-wrap config, and PATH tools. Returns a report of what was found. Set import=true to auto-import found servers into cc-wrap (skips duplicates by name or command).',
     input_schema: {
       type: 'object',
       properties: {
-        source: { type: 'string', enum: ['all', 'claude-desktop', 'npm', 'pip', 'cc-wrap', 'path'], description: 'Which source to scan. "all" (default) scans everything.' }
+        source: { type: 'string', enum: ['all', 'claude-desktop', 'npm', 'pip', 'cc-wrap', 'path'], description: 'Which source to scan. "all" (default) scans everything.' },
+        import: { type: 'boolean', description: 'If true, auto-import discovered servers into cc-wrap config. Skips servers already configured (by name or command). Default: false.' }
       },
       required: []
     }
@@ -284,6 +285,28 @@ If you cannot continue, keep the task as in_progress and create a NEW task descr
         }
       },
       required: ['question', 'options']
+    }
+  },
+  {
+    name: 'ReadImage',
+    description: 'Read an image file and return it as base64 data for inline display in the chat. Use this when you need to show an image to the user directly in the conversation. Supports PNG, JPEG, GIF, WebP, BMP formats. Returns the image as a data URL that the app renders inline. Max file size: 10MB.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'Absolute path to the image file' }
+      },
+      required: ['file_path']
+    }
+  },
+  {
+    name: 'DeleteMemory',
+    description: 'Delete one or more memories from the memory store. Use this when a memory is outdated, incorrect, or no longer relevant. You can delete by exact content match or by index. Always confirm with the user before deleting.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'Exact content string of the memory to delete (matches the content field exactly)' },
+        index: { type: 'number', description: 'Index of the memory to delete (0-based, from the memories list)' }
+      }
     }
   },
 ];

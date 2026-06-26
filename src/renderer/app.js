@@ -877,6 +877,12 @@ function setupEvents() {
         copyCodeBlock(copyBtn);
         return;
       }
+      // 工具结果图片点击 → 全屏查看
+      var img = target.closest && target.closest('.tool-result-img');
+      if (img && img.src) {
+        showImageLightbox(img.src);
+        return;
+      }
     });
   }
 
@@ -1199,6 +1205,11 @@ function setupEvents() {
         tcObj.imageData = data.imageData;
         tcObj.imageWidth = data.imageWidth;
         tcObj.imageHeight = data.imageHeight;
+        tcObj.imageMimeType = data.imageMimeType;
+      }
+      if (data.mcpImage) {
+        tcObj.mcpImage = data.mcpImage;
+        tcObj.mcpImages = data.mcpImages;
       }
       updateToolCallIncremental(data.id, tcObj);
       return;
@@ -1217,6 +1228,15 @@ function setupEvents() {
       tc.imageData = data.imageData;
       tc.imageWidth = data.imageWidth;
       tc.imageHeight = data.imageHeight;
+      tc.imageMimeType = data.imageMimeType;
+    }
+    if (data.imageFilePath) {
+      tc.imageFilePath = data.imageFilePath;
+      tc.imageMimeType = data.imageMimeType;
+    }
+    if (data.mcpImage) {
+      tc.mcpImage = data.mcpImage;
+      tc.mcpImages = data.mcpImages;
     }
 
     // 非 generating 对话跳过 DOM 更新
@@ -1645,8 +1665,8 @@ function renderToolCallHTML(tc) {
   var shouldExpand = tc.status === 'running' || tc.status === 'error';
   // Agent 工具且有子 Agent 事件时默认展开
   if (tc.name === 'Agent' && tc.subAgentEvents && tc.subAgentEvents.length > 0) shouldExpand = true;
-  // Write/Edit 完成后默认展开，让用户看到文件变更
-  if ((tc.name === 'Write' || tc.name === 'Edit') && tc.status === 'done') shouldExpand = true;
+  // Write/Edit/ReadImage 完成后默认展开，让用户看到文件变更或图片
+  if ((tc.name === 'Write' || tc.name === 'Edit' || tc.name === 'ReadImage') && tc.status === 'done') shouldExpand = true;
   var resultPreview = '';
   if (tc.result && tc.status !== 'error') {
     var raw = String(tc.result).replace(/\s+/g, ' ').trim();
@@ -1686,7 +1706,7 @@ function renderToolCallHTML(tc) {
     '<div class="tool-call-body">' +
       '<div class="tool-call-input"><div class="tool-label">输入</div><pre>' + esc(tc.input) + '</pre></div>' +
       subHTML +
-      (tc.result ? '<div class="tool-call-result"><div class="tool-label">结果</div><div class="tool-result-content">' + formatToolResult(tc.result) + '</div>' + (tc.imageData ? '<div class="screenshot-preview"><img src="data:image/jpeg;base64,' + tc.imageData + '" style="max-width:100%;border-radius:6px;cursor:pointer" onclick="this.classList.toggle(\'expanded\')" /><div class="screenshot-info">' + (tc.imageWidth || '?') + 'x' + (tc.imageHeight || '?') + '</div></div>' : '') + '</div>' : '') +
+      (tc.result ? '<div class="tool-call-result"><div class="tool-label">结果</div><div class="tool-result-content">' + formatToolResult(tc.result) + '</div>' + (tc.imageData ? '<div class="screenshot-preview"><img src="data:' + (tc.imageMimeType || 'image/jpeg') + ';base64,' + tc.imageData + '" style="max-width:100%;border-radius:6px;cursor:pointer" onclick="this.classList.toggle(\'expanded\')" /><div class="screenshot-info">' + (tc.imageWidth || '?') + 'x' + (tc.imageHeight || '?') + '</div></div>' : '') + (tc.imageFilePath ? '<div class="tool-result-image"><img class="tool-result-img tool-result-img-async" data-file-path="' + esc(tc.imageFilePath) + '" /></div>' : '') + (tc.mcpImage && tc.mcpImage.data ? '<div class="tool-result-image"><img class="tool-result-img" src="data:' + (tc.mcpImage.mimeType || 'image/png') + ';base64,' + tc.mcpImage.data + '" /></div>' : '') + '</div>' : '') +
     '</div>' +
   '</div>';
 }
@@ -1745,7 +1765,8 @@ function updateToolCallIncremental(id, tc) {
   el.classList.remove('running', 'done', 'error');
   el.classList.add(tc.status === 'error' ? 'error' : 'done');
   // 完成（done）后自动折叠，让聊天主体不被长结果挤占；error 状态保持展开方便排查
-  if (tc.status === 'error') el.classList.add('expanded');
+  // ReadImage 工具保持展开以显示图片
+  if (tc.status === 'error' || tc.name === 'ReadImage') el.classList.add('expanded');
   else el.classList.remove('expanded');
   // 图标
   var icon = el.querySelector('.tool-call-icon');
@@ -1766,7 +1787,17 @@ function updateToolCallIncremental(id, tc) {
     var existing = body && body.querySelector('.tool-call-result');
     var resultHTML = '<div class="tool-label">结果</div><div class="tool-result-content">' + formatToolResult(tc.result) + '</div>';
     if (tc.imageData) {
-      resultHTML += '<div class="screenshot-preview"><img src="data:image/jpeg;base64,' + tc.imageData + '" style="max-width:100%;border-radius:6px;cursor:pointer" onclick="this.classList.toggle(\'expanded\')" /><div class="screenshot-info">' + (tc.imageWidth || '?') + 'x' + (tc.imageHeight || '?') + '</div></div>';
+      var imgMime = tc.imageMimeType || 'image/jpeg';
+      resultHTML += '<div class="screenshot-preview"><img src="data:' + imgMime + ';base64,' + tc.imageData + '" style="max-width:100%;border-radius:6px;cursor:pointer" onclick="this.classList.toggle(\'expanded\')" /><div class="screenshot-info">' + (tc.imageWidth || '?') + 'x' + (tc.imageHeight || '?') + '</div></div>';
+    }
+    // ReadImage 工具：传路径，渲染端异步加载
+    if (tc.imageFilePath) {
+      resultHTML += '<div class="tool-result-image"><img class="tool-result-img tool-result-img-async" data-file-path="' + esc(tc.imageFilePath) + '" /></div>';
+    }
+    // MCP 图片工具生成的图片
+    if (tc.mcpImage && tc.mcpImage.data) {
+      var mime = tc.mcpImage.mimeType || 'image/png';
+      resultHTML += '<div class="tool-result-image"><img class="tool-result-img" src="data:' + mime + ';base64,' + tc.mcpImage.data + '" /></div>';
     }
     if (existing) {
       existing.innerHTML = resultHTML;
@@ -1777,6 +1808,8 @@ function updateToolCallIncremental(id, tc) {
       body.appendChild(resultEl);
     }
   }
+  // 异步加载工具结果中的本地图片
+  loadToolResultImages();
   return true;
 }
 
@@ -1866,6 +1899,7 @@ function renderMessages() {
       imageHTML += '</div>';
     }
     var toolHTML = '';
+    var toolImagesHTML = '';
     if (msg.toolCalls && msg.toolCalls.length > 0) {
       var innerTools = '';
       for (var j = 0; j < msg.toolCalls.length; j++) {
@@ -1878,11 +1912,22 @@ function renderMessages() {
         '</div>' +
         '<div class="tool-calls" style="display:none">' + innerTools + '</div>' +
       '</div>';
+      // 提取工具调用中的图片，放到消息正文可见区域
+      for (var j = 0; j < msg.toolCalls.length; j++) {
+        var tc = msg.toolCalls[j];
+        if (tc.imageFilePath) {
+          toolImagesHTML += '<div class="tool-result-image"><img class="tool-result-img tool-result-img-async" data-file-path="' + esc(tc.imageFilePath) + '" /></div>';
+        }
+        if (tc.mcpImage && tc.mcpImage.data) {
+          var mcpMime = tc.mcpImage.mimeType || 'image/png';
+          toolImagesHTML += '<div class="tool-result-image"><img class="tool-result-img" src="data:' + mcpMime + ';base64,' + tc.mcpImage.data + '" /></div>';
+        }
+      }
     }
     html += '<div class="message ' + msg.role + (msg.isError ? ' message-error' : '') + '">' +
       '<div class="msg-header"><div class="msg-avatar">' + (isUser ? '你' : 'C') + '</div><span class="msg-role">' + (isUser ? '你' : 'Claude') + '</span><span class="msg-time">' + time + '</span>' +
       (msg.isError ? '<span class="msg-error-badge">⚠ 失败</span>' : '') + '</div>' +
-      '<div class="msg-content">' + content + '</div>' + toolHTML + imageHTML +
+      '<div class="msg-content">' + content + '</div>' + toolHTML + toolImagesHTML + imageHTML +
       '<div class="msg-actions">' +
       (msg.isError ? '<button class="msg-action retry-btn" data-idx="' + i + '">↻ 重试</button>' : '') +
       '<button class="msg-action copy-btn" data-idx="' + i + '">复制</button>' +
@@ -1923,6 +1968,8 @@ function renderMessages() {
   requestAnimationFrame(function() {
     var chatArea = $('chatArea');
     if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
+    // 异步加载工具结果中的本地图片
+    loadToolResultImages();
   });
 }
 
@@ -2107,16 +2154,236 @@ function formatContent(content) {
   return content;
 }
 
-// 工具结果格式化：HTML 转义 + 段落换行 + 链接识别
+// 工具结果格式化：HTML 转义 + 段落换行 + 链接识别 + 图片内联
 function formatToolResult(text) {
   if (!text) return '';
   text = esc(text);
-  // 识别链接
+  // 用占位符保护图片，避免链接正则破坏 <img> 标签
+  var imgSlots = [];
+  // 识别图片 URL 并内联显示
+  text = text.replace(/(https?:\/\/[^\s<"]+\.(png|jpe?g|gif|webp|bmp|svg|avif))/gi, function(m) {
+    var idx = imgSlots.length;
+    imgSlots.push('<img class="tool-result-img" src="' + m + '" />');
+    return '\x00IMG' + idx + '\x00';
+  });
+  // 识别本地图片文件路径（Windows 和 Unix 风格）
+  text = text.replace(/([A-Z]:\\[^\s<"]+\.(png|jpe?g|gif|webp|bmp))/gi, function(m) {
+    var idx = imgSlots.length;
+    imgSlots.push('<span class="tool-result-img-placeholder" data-local-path="' + m + '">🖼 ' + m + '</span>');
+    return '\x00IMG' + idx + '\x00';
+  });
+  text = text.replace(/(\/[^\s<"]+\.(png|jpe?g|gif|webp|bmp))/gi, function(m) {
+    var idx = imgSlots.length;
+    imgSlots.push('<span class="tool-result-img-placeholder" data-local-path="' + m + '">🖼 ' + m + '</span>');
+    return '\x00IMG' + idx + '\x00';
+  });
+  // 识别链接（此时不会有图片 URL 干扰）
   text = text.replace(/(https?:\/\/[^\s<"]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  // 恢复图片
+  for (var i = 0; i < imgSlots.length; i++) {
+    text = text.replace('\x00IMG' + i + '\x00', imgSlots[i]);
+  }
   // 段落换行（双换行分段，单换行断行）
   var parts = text.split(/\n\n+/);
   return parts.map(function(p) { return '<p>' + p.replace(/\n/g, '<br>') + '</p>'; }).join('');
 }
+
+// 加载工具结果中的本地图片占位符（文本中的路径 + ReadImage 的 data-file-path）
+function loadToolResultImages() {
+  // 1. 文本中的本地图片路径占位符
+  var placeholders = document.querySelectorAll('.tool-result-img-placeholder[data-local-path]');
+  // 2. ReadImage 工具返回的异步加载图片
+  var asyncImgs = document.querySelectorAll('.tool-result-img-async[data-file-path]');
+  var all = Array.from(placeholders).concat(Array.from(asyncImgs));
+  all.forEach(function(el) {
+    var filePath = el.getAttribute('data-local-path') || el.getAttribute('data-file-path');
+    if (!filePath || el.dataset.loaded) return;
+    // 转换 Git Bash 风格路径 (/e/...) 到 Windows 风格 (E:\...)
+    if (/^\/[a-zA-Z]\//.test(filePath)) {
+      filePath = filePath.charAt(1).toUpperCase() + ':' + filePath.slice(2).replace(/\//g, '\\');
+    }
+    el.dataset.loaded = '1';
+    // 显示加载提示
+    if (el.tagName === 'IMG') {
+      el.style.minHeight = '60px';
+      el.style.background = 'var(--bg-secondary)';
+      el.style.borderRadius = '8px';
+    } else {
+      el.textContent = '🖼 加载中...';
+    }
+    window.api.invoke('read-file-as-data-url', filePath).then(function(res) {
+      if (res && res.success && res.dataUrl) {
+        var img = document.createElement('img');
+        img.className = 'tool-result-img';
+        img.src = res.dataUrl;
+        el.parentNode.replaceChild(img, el);
+      } else {
+        // 加载失败
+        if (el.tagName === 'IMG') {
+          el.style.minHeight = '';
+          el.style.background = '';
+          el.style.borderRadius = '';
+          el.alt = '❌ 图片加载失败';
+        } else {
+          el.textContent = '❌ 图片加载失败: ' + (res && res.error || '未知错误');
+          el.style.color = 'var(--accent-red, #e74c3c)';
+        }
+      }
+    }).catch(function(err) {
+      if (el.tagName === 'IMG') {
+        el.style.minHeight = '';
+        el.style.background = '';
+        el.style.borderRadius = '';
+        el.alt = '❌ 图片加载失败';
+      } else {
+        el.textContent = '❌ 图片加载失败: ' + (err.message || '读取错误');
+        el.style.color = 'var(--accent-red, #e74c3c)';
+      }
+    });
+  });
+}
+
+// 全屏查看图片（lightbox）
+function showImageLightbox(src) {
+  if (!src) return;
+  var overlay = document.createElement('div');
+  overlay.className = 'image-lightbox';
+  overlay.onclick = function(e) { if (e.target === overlay) document.body.removeChild(overlay); };
+  var img = document.createElement('img');
+  img.src = src;
+  img.onclick = function(e) { e.stopPropagation(); };
+  overlay.appendChild(img);
+  // 下载按钮
+  var dl = document.createElement('a');
+  dl.className = 'image-lightbox-download';
+  dl.textContent = '⬇ 下载';
+  dl.href = src;
+  dl.download = 'image-' + Date.now() + '.png';
+  dl.onclick = function(e) { e.stopPropagation(); };
+  overlay.appendChild(dl);
+  // 关闭按钮
+  var closeBtn = document.createElement('div');
+  closeBtn.className = 'image-lightbox-close';
+  closeBtn.textContent = '✕';
+  closeBtn.onclick = function() { document.body.removeChild(overlay); };
+  overlay.appendChild(closeBtn);
+  document.body.appendChild(overlay);
+  // ESC 关闭
+  function onKey(e) { if (e.key === 'Escape') { document.body.removeChild(overlay); document.removeEventListener('keydown', onKey); } }
+  document.addEventListener('keydown', onKey);
+}
+
+// ========== MCP 服务器管理 ==========
+function openMcpModal() {
+  var modal = $('mcpModal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  renderMcpServers();
+}
+
+function renderMcpServers() {
+  var list = $('mcpServerList');
+  if (!list) return;
+  var servers = state.mcpServers || [];
+  if (servers.length === 0) {
+    list.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;padding:12px 0">暂无 MCP 服务器，使用下方表单添加。</div>';
+    return;
+  }
+  var html = '';
+  servers.forEach(function(s, i) {
+    var status = (state.mcpStatuses || []).find(function(st) { return st.name === s.name; });
+    var isConnected = status && status.connected;
+    var toolCount = status && status.toolCount || 0;
+    html += '<div class="mcp-server-card">' +
+      '<div class="mcp-server-header">' +
+        '<span class="mcp-server-name">' + esc(s.name) + '</span>' +
+        '<span class="mcp-server-status ' + (isConnected ? 'connected' : 'disconnected') + '">' +
+          (isConnected ? '🟢 已连接 (' + toolCount + ' 工具)' : '🔴 未连接') +
+        '</span>' +
+      '</div>' +
+      '<div class="mcp-server-detail">命令: ' + esc(s.command) + ' ' + esc((s.args || []).join(' ')) + '</div>' +
+      (s.description ? '<div class="mcp-server-desc">' + esc(s.description) + '</div>' : '') +
+      '<div class="mcp-server-actions">' +
+        '<button class="btn-sm btn-danger" onclick="deleteMcpServer(' + i + ')">删除</button>' +
+      '</div>' +
+    '</div>';
+  });
+  list.innerHTML = html;
+}
+
+function addMcpServer() {
+  var name = ($('mcpName') || {}).value || '';
+  var command = ($('mcpCommand') || {}).value || '';
+  var argsStr = ($('mcpArgs') || {}).value || '';
+  var cwd = ($('mcpCwd') || {}).value || '';
+  var envStr = ($('mcpEnv') || {}).value || '';
+
+  if (!name.trim() || !command.trim()) {
+    showToast('请填写名称和启动命令', 'warning');
+    return;
+  }
+
+  var args = argsStr.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+  var env = {};
+  if (envStr.trim()) {
+    try { env = JSON.parse(envStr); } catch(e) {
+      showToast('环境变量格式错误，需要 JSON', 'error');
+      return;
+    }
+  }
+
+  var server = { name: name.trim(), command: command.trim(), args: args, cwd: cwd.trim(), env: env };
+  state.mcpServers.push(server);
+
+  window.api.invoke('save-mcp-servers', { servers: state.mcpServers }).then(function() {
+    showToast('已添加: ' + server.name, 'success');
+    renderMcpServers();
+    // 连接新服务器
+    window.api.invoke('mcp-connect', server);
+    // 清空表单
+    $('mcpName').value = '';
+    $('mcpCommand').value = '';
+    $('mcpArgs').value = '';
+    $('mcpCwd').value = '';
+    $('mcpEnv').value = '';
+  }).catch(function(e) {
+    showToast('保存失败: ' + e.message, 'error');
+  });
+}
+
+function testMcpServer() {
+  var command = ($('mcpCommand') || {}).value || '';
+  var argsStr = ($('mcpArgs') || {}).value || '';
+  if (!command.trim()) {
+    showToast('请填写启动命令', 'warning');
+    return;
+  }
+  var args = argsStr.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+  showToast('正在测试连接...', 'info');
+
+  window.api.invoke('test-mcp-server', { command: command.trim(), args: args }).then(function(result) {
+    if (result && result.success) {
+      showToast('连接成功！工具数: ' + (result.toolCount || 0), 'success');
+    } else {
+      showToast('连接失败: ' + (result && result.error || '未知错误'), 'error');
+    }
+  }).catch(function(e) {
+    showToast('测试失败: ' + e.message, 'error');
+  });
+}
+
+function deleteMcpServer(index) {
+  var server = state.mcpServers[index];
+  if (!server) return;
+  if (!confirm('确定删除 MCP 服务器 "' + server.name + '"？')) return;
+  state.mcpServers.splice(index, 1);
+  window.api.invoke('save-mcp-servers', { servers: state.mcpServers }).then(function() {
+    showToast('已删除: ' + server.name, 'success');
+    renderMcpServers();
+    window.api.invoke('mcp-disconnect', server.name);
+  });
+}
+
 function copyCodeBlock(btn) {
   var code = btn.getAttribute('data-code');
   // 还原 HTML 实体

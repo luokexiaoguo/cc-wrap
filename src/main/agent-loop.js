@@ -12,7 +12,7 @@ const { COMPUTER_USE_TOOL_NAMES } = require('./computer-use');
 const { taskQueue, QueueType } = require('./task-queue');
 
 const PERMISSION_REQUIRED_TOOLS = ['Write', 'Edit', 'Bash', ...COMPUTER_USE_TOOL_NAMES];
-const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'ListDirectory', 'WebSearch', 'WebFetch', 'GetAgentResult', 'DiscoverMcp'];
+const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep', 'ListDirectory', 'WebSearch', 'WebFetch', 'GetAgentResult', 'DiscoverMcp', 'ReadImage'];
 
 // 最大循环轮数
 const MAX_ROUNDS = 50;
@@ -111,6 +111,7 @@ async function runAgentLoop(mainWindow, options) {
       workDir,
       memories: loadMemories(),
       activeSkills,
+      mcpTools,
       customPrompt: _storeRef ? _storeRef.get('customSystemPrompt', '') : ''
     }) + (extraSystemPrompt ? '\n\n' + extraSystemPrompt : '');
 
@@ -282,6 +283,8 @@ async function runAgentLoop(mainWindow, options) {
       // 5. 执行工具调用
       // 策略：只读工具并行执行，写操作工具串行执行
       const toolResults = [];
+      let rendererPayloadMcpImage = null;
+      let rendererPayloadMcpImages = null;
 
       const allReadOnly = toolCalls.every(tc => READ_ONLY_TOOLS.includes(tc.name));
 
@@ -314,7 +317,19 @@ async function runAgentLoop(mainWindow, options) {
               resultContent = [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${result.image}` } }, { type: 'text', text: `截图成功 (${result.width}x${result.height})` }];
             }
           } else {
-            resultContent = result.error ? `错误: ${result.error}` : (result.content || JSON.stringify(result));
+            const rawContent = result.error ? `错误: ${result.error}` : (result.content || JSON.stringify(result));
+
+            // MCP 图片工具返回 { text, images } 结构化对象
+            if (rawContent && typeof rawContent === 'object' && rawContent.images && Array.isArray(rawContent.images) && rawContent.images.length > 0) {
+              const mcpImages = rawContent.images;
+              resultContent = rawContent.text || `生成了 ${mcpImages.length} 张图片`;
+              // 把第一张图片作为主图片传递给渲染层
+              rendererPayloadMcpImage = mcpImages[0];
+              rendererPayloadMcpImages = mcpImages;
+            } else {
+              resultContent = rawContent;
+            }
+
             const truncateLimit = result.error ? 600 : 1500;
             if (typeof resultContent === 'string' && resultContent.length > truncateLimit) {
               resultContent = resultContent.substring(0, truncateLimit) + `\n... [结果过长，省略 ${resultContent.length - truncateLimit} 字符]`;
@@ -329,6 +344,21 @@ async function runAgentLoop(mainWindow, options) {
             rendererPayload.imageWidth = result.width;
             rendererPayload.imageHeight = result.height;
           }
+          // ReadImage 工具返回的图片（传路径，渲染端异步加载）
+          if (result.imageFilePath && !result.isImage) {
+            rendererPayload.imageFilePath = result.imageFilePath;
+            rendererPayload.imageMimeType = result.imageMimeType || 'image/jpeg';
+          } else if (result.imageData && !result.isImage) {
+            rendererPayload.imageData = result.imageData;
+            rendererPayload.imageMimeType = result.imageMimeType || 'image/jpeg';
+          }
+          // MCP 图片数据传递给渲染层
+          if (rendererPayloadMcpImage) {
+            rendererPayload.mcpImage = rendererPayloadMcpImage;
+            rendererPayload.mcpImages = rendererPayloadMcpImages;
+          }
+          rendererPayloadMcpImage = null;
+          rendererPayloadMcpImages = null;
           sendToRenderer(mainWindow, 'agent-stream-tool-result', rendererPayload);
         }
       } else {
@@ -374,6 +404,8 @@ async function runAgentLoop(mainWindow, options) {
 
         // 处理图片返回（ComputerScreenshot 等）
         let resultContent;
+        let mcpImg = null;
+        let mcpImgs = null;
         if (result.isImage && result.image) {
           // 根据 API 格式返回不同格式的图片内容
           const useAnthropic = shouldUseAnthropicFormat(config.endpoint, config.model);
@@ -410,9 +442,18 @@ async function runAgentLoop(mainWindow, options) {
             ];
           }
         } else {
-          resultContent = result.error
+          const rawContent = result.error
             ? `错误: ${result.error}`
             : (result.content || JSON.stringify(result));
+
+          // MCP 图片工具返回 { text, images } 结构化对象
+          if (rawContent && typeof rawContent === 'object' && rawContent.images && Array.isArray(rawContent.images) && rawContent.images.length > 0) {
+            mcpImgs = rawContent.images;
+            mcpImg = mcpImgs[0];
+            resultContent = rawContent.text || `生成了 ${mcpImgs.length} 张图片`;
+          } else {
+            resultContent = rawContent;
+          }
 
           // 截断过大的工具结果，避免撑爆上下文
           // 普通结果 1500 字符截断，错误结果 600 字符截断（错误信息通常前三行就能说明问题）
@@ -438,6 +479,18 @@ async function runAgentLoop(mainWindow, options) {
           rendererPayload.imageData = result.image;
           rendererPayload.imageWidth = result.width;
           rendererPayload.imageHeight = result.height;
+        }
+        // ReadImage 工具返回的图片（传路径，渲染端异步加载）
+        if (result.imageFilePath && !result.isImage) {
+          rendererPayload.imageFilePath = result.imageFilePath;
+          rendererPayload.imageMimeType = result.imageMimeType || 'image/jpeg';
+        } else if (result.imageData && !result.isImage) {
+          rendererPayload.imageData = result.imageData;
+          rendererPayload.imageMimeType = result.imageMimeType || 'image/jpeg';
+        }
+        if (mcpImg) {
+          rendererPayload.mcpImage = mcpImg;
+          rendererPayload.mcpImages = mcpImgs;
         }
         sendToRenderer(mainWindow, 'agent-stream-tool-result', rendererPayload);
       }

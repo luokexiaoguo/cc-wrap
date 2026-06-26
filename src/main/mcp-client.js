@@ -264,12 +264,23 @@ class McpClient {
     }
 
     const content = result.content || [];
+    const images = [];
     const text = content.map((c) => {
       if (c.type === 'text') return c.text;
-      if (c.type === 'image') return `[图片: ${c.mimeType || 'unknown'}]`;
+      if (c.type === 'image') {
+        // 保留图片 base64 数据，供渲染层内联显示
+        if (c.data) {
+          images.push({ data: c.data, mimeType: c.mimeType || 'image/png' });
+        }
+        return images.length ? '' : `[图片: ${c.mimeType || 'unknown'}]`;
+      }
       return JSON.stringify(c);
-    }).join('\n');
+    }).filter(Boolean).join('\n');
 
+    // 有图片时返回结构化对象，否则返回纯文本
+    if (images.length > 0) {
+      return { text: text || null, images };
+    }
     return text;
   }
 

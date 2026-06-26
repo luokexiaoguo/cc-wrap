@@ -1076,6 +1076,52 @@ body.light-theme .tool-call-subagent {
 .tool-call.running { border-color: var(--accent-yellow); }
 .tool-call.error { border-color: var(--accent-red); }
 .tool-call.done { border-color: var(--accent-green); }
+
+/* MCP 图片工具内联图片 */
+.tool-result-image { margin: 8px 0; text-align: center; }
+.tool-result-img {
+  max-width: 100%; max-height: 300px; border-radius: 8px;
+  cursor: pointer; margin: 4px 0; border: 1px solid var(--border);
+  transition: transform 0.2s; display: inline-block;
+}
+.tool-result-img:hover { transform: scale(1.02); }
+.tool-result-img-placeholder {
+  display: inline-block; padding: 4px 8px; background: var(--accent-bg);
+  border-radius: 6px; font-size: 12px; color: var(--text-secondary);
+  cursor: default; margin: 4px 0;
+}
+.tool-result-img-async {
+  min-height: 60px; background: var(--bg-secondary); border-radius: 8px;
+  display: block; animation: imgPulse 1.5s ease-in-out infinite;
+}
+@keyframes imgPulse { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
+
+/* Lightbox 全屏查看 */
+.image-lightbox {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,0.88); display: flex;
+  align-items: center; justify-content: center;
+  cursor: zoom-out; animation: fadeIn 0.15s ease;
+}
+.image-lightbox img {
+  max-width: 90vw; max-height: 90vh; border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5); cursor: default;
+}
+.image-lightbox-download {
+  position: absolute; top: 16px; right: 56px;
+  background: var(--accent); color: #fff; padding: 8px 16px;
+  border-radius: 6px; text-decoration: none; font-size: 14px;
+  transition: opacity 0.2s;
+}
+.image-lightbox-download:hover { opacity: 0.85; }
+.image-lightbox-close {
+  position: absolute; top: 16px; right: 16px;
+  color: #fff; font-size: 24px; cursor: pointer;
+  width: 36px; height: 36px; display: flex;
+  align-items: center; justify-content: center;
+  border-radius: 50%; transition: background 0.2s;
+}
+.image-lightbox-close:hover { background: rgba(255,255,255,0.15); }
 .tool-call .spinner {
   width: 14px; height: 14px;
   border: 2px solid var(--border);
@@ -2286,3 +2332,22 @@ body.light-theme .mcp-status.disconnected { background: rgba(179,70,58,0.12); co
   display: flex; align-items: center; gap: 2px;
   margin-top: 14px;
 }
+
+/* MCP 服务器卡片 */
+.mcp-server-card {
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px; margin-bottom: 8px;
+}
+.mcp-server-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+}
+.mcp-server-name { font-weight: 600; font-size: 14px; }
+.mcp-server-status { font-size: 12px; }
+.mcp-server-status.connected { color: var(--accent-green, #4caf50); }
+.mcp-server-status.disconnected { color: var(--text-secondary); }
+.mcp-server-detail { font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); margin-bottom: 4px; }
+.mcp-server-desc { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.mcp-server-actions { display: flex; gap: 8px; }
+.btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
+.btn-sm.btn-danger { border-color: var(--accent-red, #e74c3c); color: var(--accent-red, #e74c3c); }
+.btn-sm.btn-danger:hover { background: var(--accent-red, #e74c3c); color: #fff; }

@@ -436,6 +436,78 @@ async function read(input, ctx) {
   }
 }
 
+/**
+ * ReadImage - 读取图片文件并返回 base64 data URL，供渲染层内联显示
+ */
+async function readImage(input, ctx) {
+  const fp = input.file_path || input.filePath;
+  if (!fp) return { error: 'file_path is required' };
+  const filePath = resolvePath(fp, ctx.workDir);
+  try {
+    const stat = fs.statSync(filePath);
+    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+    if (stat.size > MAX_SIZE) {
+      return { error: `文件过大 (${(stat.size / 1024 / 1024).toFixed(1)}MB > 10MB)` };
+    }
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    const mimeMap = {
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+      gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+      ico: 'image/x-icon', svg: 'image/svg+xml', avif: 'image/avif'
+    };
+    const mime = mimeMap[ext];
+    if (!mime) {
+      return { error: `不支持的图片格式: .${ext}` };
+    }
+    const buf = fs.readFileSync(filePath);
+    // 只传路径和 mime，不传 base64（太大，IPC 会丢弃）
+    // 渲染端通过 read-file-as-data-url IPC 加载
+    return {
+      content: `图片已加载: ${path.basename(filePath)} (${(stat.size / 1024).toFixed(0)}KB)`,
+      imageFilePath: filePath,
+      imageMimeType: mime,
+    };
+  } catch (err) {
+    return { error: `读取图片失败: ${err.message}` };
+  }
+}
+
+/**
+ * DeleteMemory - 删除记忆条目
+ */
+async function deleteMemory(input, ctx) {
+  const { content, index } = input;
+  if (content === undefined && index === undefined) {
+    return { error: '需要提供 content 或 index 来指定要删除的记忆' };
+  }
+  const memoryPath = path.join(require('electron').app.getPath('userData'), 'memory.json');
+  let memoryData = { memories: [] };
+  try {
+    memoryData = JSON.parse(fs.readFileSync(memoryPath, 'utf-8'));
+  } catch {
+    return { error: '记忆文件不存在或为空' };
+  }
+  const before = memoryData.memories.length;
+  if (index !== undefined && index !== null) {
+    // 按索引删除
+    if (index < 0 || index >= before) {
+      return { error: `索引 ${index} 超出范围 (0-${before - 1})` };
+    }
+    const removed = memoryData.memories.splice(index, 1)[0];
+    fs.writeFileSync(memoryPath, JSON.stringify(memoryData, null, 2));
+    return { content: `已删除记忆 #${index}: "${(removed.content || '').slice(0, 80)}"` };
+  } else {
+    // 按内容匹配删除
+    const idx = memoryData.memories.findIndex(m => m.content === content);
+    if (idx === -1) {
+      return { error: `未找到匹配的记忆: "${(content || '').slice(0, 80)}"` };
+    }
+    memoryData.memories.splice(idx, 1);
+    fs.writeFileSync(memoryPath, JSON.stringify(memoryData, null, 2));
+    return { content: `已删除记忆: "${(content || '').slice(0, 80)}"` };
+  }
+}
+
 function write(input, ctx) {
   const content = input.content;
   const filePath = input.file_path || input.filePath;
@@ -1535,8 +1607,10 @@ async function installMcp(input, ctx) {
 // ==================== MCP 发现 ====================
 
 async function discoverMcp(input, ctx) {
-  const { source = 'all' } = input || {};
+  const { source = 'all', import: doImport = false } = input || {};
   const results = [];
+  const imported = [];
+  const skipped = [];
 
   // 1. 扫描 cc-wrap 自身配置
   if (source === 'all' || source === 'cc-wrap') {
@@ -1675,6 +1749,55 @@ async function discoverMcp(input, ctx) {
     }
   }
 
+  // 自动导入：读取现有配置，跳过已存在的，添加新的
+  if (doImport) {
+    const { app } = require('electron');
+    const mcpPath = path.join(app.getPath('userData'), 'mcp-servers.json');
+    let existing = { servers: [] };
+    try { existing = JSON.parse(fs.readFileSync(mcpPath, 'utf-8')); } catch {}
+    const existingNames = new Set((existing.servers || []).map(s => s.name));
+    const existingCommands = new Set((existing.servers || []).map(s => s.command + ' ' + (s.args || []).join(' ')));
+
+    const toImport = [];
+    for (const r of results) {
+      if (!r.servers) continue;
+      for (const s of r.servers) {
+        const cmd = s.command || s.suggestedCommand || '';
+        const parts = cmd.trim().split(/\s+/);
+        const command = parts[0] || '';
+        const args = parts.slice(1);
+        const key = command + ' ' + args.join(' ');
+        if (existingNames.has(s.name)) {
+          skipped.push(s.name + ' (已存在)');
+          continue;
+        }
+        if (existingCommands.has(key)) {
+          skipped.push(s.name + ' (命令已存在: ' + key + ')');
+          continue;
+        }
+        toImport.push({ name: s.name, command, args, env: s.env || {}, cwd: '' });
+      }
+    }
+
+    if (toImport.length > 0) {
+      existing.servers.push(...toImport);
+      fs.writeFileSync(mcpPath, JSON.stringify(existing, null, 2));
+      for (const s of toImport) {
+        imported.push(s.name);
+        // 尝试连接
+        try {
+          const { McpClient } = require('./mcp-client');
+          const client = new McpClient(s);
+          await client.connect();
+          const mcpClient = require('./mcp-client');
+          mcpClient.clients.set(s.name, client);
+        } catch (err) {
+          console.warn(`[DiscoverMcp] 自动连接 ${s.name} 失败: ${err.message}`);
+        }
+      }
+    }
+  }
+
   // 构建返回
   const foundItems = results.filter(r => r.servers || (r.tools && r.tools.length > 0));
   const totalServers = foundItems.reduce((sum, r) => sum + (r.count || 0), 0);
@@ -1696,8 +1819,16 @@ async function discoverMcp(input, ctx) {
         msg += '\n';
       }
     }
-    msg += '使用 InstallMcp 可导入这些服务器。';
-    return { content: msg, _discovered: results };
+    if (imported.length > 0) {
+      msg += `已自动导入 ${imported.length} 个: ${imported.join(', ')}\n`;
+    }
+    if (skipped.length > 0) {
+      msg += `跳过 ${skipped.length} 个: ${skipped.join(', ')}\n`;
+    }
+    if (!doImport && imported.length === 0) {
+      msg += '提示：传入 import=true 可自动导入这些服务器。\n';
+    }
+    return { content: msg, _discovered: results, imported, skipped };
   }
 
   // 什么都没发现
@@ -2016,6 +2147,8 @@ const TOOL_HANDLERS = {
   InstallSkill: installSkill,
   InstallMcp: installMcp,
   DiscoverMcp: discoverMcp,
+  ReadImage: readImage,
+  DeleteMemory: deleteMemory,
   // Computer Use 工具
   ...COMPUTER_USE_HANDLERS,
   AskUserQuestion: askUserQuestion,
