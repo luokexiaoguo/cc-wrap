@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"E:/openclawPJ/\" 2>&1)",
+      "Read(//e/openclawPJ/**)",
+      "Bash(find \"E:/\" -maxdepth 4 -name \"claude-code-desktop\" 2>/dev/null | head -5)",
+      "Read(//e//**)",
+      "Bash(mkdir -p \"E:/openclawPJ/claude-code-desktop\")",
+      "Bash(npm create *)",
+      "Bash(npx tauri *)"
+    ],
+    "additionalDirectories": [
+      "E:\\openclawPJ\\claude-code-desktop\\src-tauri",
+      "E:\\openclawPJ\\claude-code-desktop\\src"
+    ]
+  }
+}
