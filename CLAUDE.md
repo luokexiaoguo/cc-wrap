@@ -47,6 +47,12 @@ Terminal IPC channels (node-pty):
 6. Context compression triggers at >80K tokens (progressive: 80–100K keep 8, 100–120K keep 6, 120–150K keep 4, 150K+ keep 2 recent messages; also preserves text-containing assistant messages beyond the window)
 7. **效率优化**: 工具结果普通 1500/错误 600 字符截断；滑动窗口检测卡住（最近 8 轮中 >=3 轮失败且 >=50% 失败率）时注入策略提示
 
+**Prompt 动态注入（MiMo/opencode 借鉴）**:
+- `system` 分两层：`baseSystem`（不变，buildSystemPrompt 结果）→ 每轮重赋 `system = baseSystem + 上下文预算节`，**必须用 `system` 变量传入 API，不要传 `baseSystem`**
+- 每轮注入 `# Context Budget`（当前 tokens / 阈值 / 占用百分比，≥80% 加精简提醒），用 `formatTokens()` 人类可读格式化
+- **工具失败分类**: 错误结果带 `[工具失败: 分类] 错误: ...` 前缀（`_classifyToolError`：超时可重试/网络/用户拒绝权限/路径不存在/输入参数错/命令失败）。**卡住检测 `roundFailed` 的匹配逻辑必须与这个前缀同步**（`startsWith('错误:') || startsWith('[工具失败:')`，兼容字符串/数组 content）——曾因只匹配 `错误:` 导致新前缀下卡住检测静默失效
+- **压缩尾部提醒**: `compactMessages` 摘要后追加未完成任务清单（`taskGetAll()` 过滤 `status !== 'completed'`）+ `[下一步]` 提醒，防止压缩后迷失方向
+
 **"一直思考"防卡死不变量**: `runAgentLoop` 的**每一个提前返回路径**（空 API Key、取消、API 异常、超最大轮数）都必须先 `sendToRenderer(mainWindow, 'agent-complete', { success: false, error })` 再 return，否则渲染端收不到完成事件、UI 永久卡在"思考中"。renderer 侧还有三层兜底（`agent-start` `.then` 失败分支、`.catch`、`generateResponse` 外层 catch）恢复 UI 并清 `currentLoopId`。新增提前返回时必须补发 `agent-complete`。
 
 ### 3 级消息队列 (`src/main/task-queue.js`)
@@ -163,7 +169,7 @@ JSON-RPC 2.0 客户端，支持两种传输模式（自动检测）：
 
 ### System Prompt (`src/main/system-prompt.js`)
 
-Composition order (later overrides earlier semantically): base Claude Code identity prompt → working-directory CLAUDE.md (searches `./CLAUDE.md` then `.claude/CLAUDE.md`) → memories list → MCP tools list → Image Display rules → Memory Management rules → active Skills content (4KB cap) → user's `customSystemPrompt` from config. Base prompt explicitly instructs the model to use TaskCreate/TaskUpdate for non-trivial tasks (≥3 steps) so the user-visible task panel populates.
+Composition order (later overrides earlier semantically): base Claude Code identity prompt → `# Current Environment` (local date / platform+arch / cwd / hostname — 给模型日历感知，解决"今天/最新发布"类问题) → working-directory CLAUDE.md (searches `./CLAUDE.md` then `.claude/CLAUDE.md`) → memories list → MCP tools list → Image Display rules → Memory Management rules → active Skills content (4KB cap) → user's `customSystemPrompt` from config. Base prompt explicitly instructs the model to use TaskCreate/TaskUpdate for non-trivial tasks (≥3 steps) so the user-visible task panel populates.
 
 **System prompt optimization**: Base prompt was condensed ~45% (from ~3,700 to ~2,000 tokens). Skills injection has a 4KB character cap — excess skills show "内容过长已省略". MCP tool descriptions are truncated to 120 chars. All dynamic sections (Image Display, MCP Tools, Memory) are concise one-liners.
 
@@ -262,3 +268,5 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 - **MCP image data in agent-loop**: When MCP tools return `{ text, images }` structured objects, `rendererPayloadMcpImage` is set from parallel path variables that must be declared before the loop and reset after `sendToRenderer`.
 - **Provider endpoint URL building**: always build request URLs via `buildApiUrl()` in `api-client.js` — never inline the `endpoint.replace(/\/v1/...)... + '/v1/...'` pattern. Gemini (`/v1beta/openai`) and Zhipu GLM (`/paas/v4`) are special-cased there; inlining breaks them with 404/400 and the test button is the fastest way to notice.
 - **`agent-complete` on every early return**: any new `return { success:false }` path added to `runAgentLoop` must send `agent-complete` first, or the chat UI sticks on "思考中" forever. Keep the renderer 3-layer fallback (`agent-start` `.then` failure / `.catch` / `generateResponse` catch) intact when touching this.
+- **Prompt 注入要与消费方同步**: 新增的 prompt 注入（如 `_classifyToolError` 前缀）若改变了既有消息格式，必须同步更新依赖它的逻辑（`roundFailed` 卡住检测、`estimateTokens`、压缩提取）。2026-08 曾因只匹配 `错误:` 前缀导致卡住检测静默失效。加 prompt 功能前先 grep 谁在消费这些格式。
+- **`system` vs `baseSystem`**: agent-loop 里 `system` 每轮重建（含上下文预算），`baseSystem` 不变。别误把 `baseSystem` 传进 API 调用（丢了预算注入），也别在 `system` 上累积拼接（每轮必须重新赋值，避免无限膨胀）。

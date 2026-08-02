@@ -120,6 +120,15 @@ function buildSystemPrompt(options = {}) {
     .replace('{{SHELL_NAME}}', shellName)
     .replace('{{SHELL_HINT}}', shellHint);
 
+  // 当前环境：日期 + 平台。模型需要日历感知（"今天/最新/最近发布"类问题）与运行环境事实
+  const now = new Date();
+  const dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  prompt += `\n\n# Current Environment
+- Current date: ${dateStr} (local time)
+- Platform: ${process.platform} ${process.arch}
+- Working directory: ${options.workDir || process.cwd()}
+- Hostname: ${require('os').hostname()}`;
+
   // CLAUDE.md
   const claudeMd = readClaudeMd(options.workDir);
   if (claudeMd) {

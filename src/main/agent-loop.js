@@ -7,7 +7,7 @@ const { app } = require('electron');
 const { buildSystemPrompt } = require('./system-prompt');
 const { getEnabledTools, mergeTools } = require('./tools');
 const { callAPIStream, shouldUseAnthropicFormat } = require('./api-client');
-const { executeTool, taskCompleteAll } = require('./tool-executor');
+const { executeTool, taskCompleteAll, taskGetAll } = require('./tool-executor');
 const { COMPUTER_USE_TOOL_NAMES } = require('./computer-use');
 const { taskQueue, QueueType } = require('./task-queue');
 
@@ -107,13 +107,15 @@ async function runAgentLoop(mainWindow, options) {
       console.log('[Agent Loop] 激活 Skill:', activeSkills.map(s => s.name).join(', '));
     }
 
-    const system = buildSystemPrompt({
+    const baseSystem = buildSystemPrompt({
       workDir,
       memories: loadMemories(),
       activeSkills,
       mcpTools,
       customPrompt: _storeRef ? _storeRef.get('customSystemPrompt', '') : ''
     }) + (extraSystemPrompt ? '\n\n' + extraSystemPrompt : '');
+    // 可变 system：每轮追加上下文预算（MiMo Code context budget 思路，让模型感知剩余空间）
+    let system = baseSystem;
 
     // 2. 获取工具定义（内置 + MCP）
     const builtinTools = getEnabledTools();
@@ -160,9 +162,16 @@ async function runAgentLoop(mainWindow, options) {
       round++;
       console.log(`[Agent Loop] 第 ${round} 轮`);
 
-      // 检查上下文窗口，动态阈值压缩
+      // 上下文预算注入（MiMo Code 思路）：让模型知道当前占用与剩余空间，自动调整简洁度
       const estimatedTokens = estimateTokens(currentMessages);
       const compressionThreshold = getCompressionThreshold(apiConfig.model);
+      const pct = Math.min(100, Math.round((estimatedTokens / compressionThreshold) * 100));
+      system = baseSystem + `\n\n# Context Budget (Round ${round})
+- Current context: ~${formatTokens(estimatedTokens)} tokens
+- Compression threshold: ~${formatTokens(compressionThreshold)} tokens
+- Usage: ${pct}%${pct >= 80 ? ' — 接近上限，回答请尽量精简，必要时主动调用工具核对而非盲目重试' : ''}`;
+
+      // 检查上下文窗口，动态阈值压缩
       if (estimatedTokens > compressionThreshold) {
         console.log(`[Agent Loop] 上下文过长 (${estimatedTokens} tokens，阈值 ${compressionThreshold})，自动压缩...`);
         sendToRenderer(mainWindow, 'agent-compressing', { compressing: true });
@@ -322,7 +331,9 @@ async function runAgentLoop(mainWindow, options) {
               resultContent = [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${result.image}` } }, { type: 'text', text: `截图成功 (${result.width}x${result.height})` }];
             }
           } else {
-            const rawContent = result.error ? `错误: ${result.error}` : (result.content || JSON.stringify(result));
+            const rawContent = result.error
+              ? `${_classifyToolError(result.error, tc.name)} 错误: ${result.error}`
+              : (result.content || JSON.stringify(result));
 
             // MCP 图片工具返回 { text, images } 结构化对象
             if (rawContent && typeof rawContent === 'object' && rawContent.images && Array.isArray(rawContent.images) && rawContent.images.length > 0) {
@@ -448,7 +459,7 @@ async function runAgentLoop(mainWindow, options) {
           }
         } else {
           const rawContent = result.error
-            ? `错误: ${result.error}`
+            ? `${_classifyToolError(result.error, tc.name)} 错误: ${result.error}`
             : (result.content || JSON.stringify(result));
 
           // MCP 图片工具返回 { text, images } 结构化对象
@@ -511,7 +522,12 @@ async function runAgentLoop(mainWindow, options) {
         // 卡住检测：滑动窗口统计最近 8 轮的失败率
         // 相比"连续失败计数"，滑动窗口更能捕捉"大多数尝试都在失败"的模式
         // 即使偶尔成功一轮也不会重置计数
-        const roundFailed = toolResults.some(r => typeof r.content === 'string' && r.content.startsWith('错误:'));
+        // 错误结果现在带 [工具失败: xxx] 前缀（见 _classifyToolError），两种都算失败
+        const roundFailed = toolResults.some(r => {
+          const c = r.content;
+          return (typeof c === 'string' && (c.startsWith('错误:') || c.startsWith('[工具失败:') || c.includes('错误:')))
+            || (Array.isArray(c) && c.some(b => b.type === 'text' && (b.text.startsWith('错误:') || b.text.startsWith('[工具失败:') || b.text.includes('错误:'))));
+        });
         const currentFamily = toolCalls.length > 0 ? _toolFamily(toolCalls[0].name, toolCalls[0].input) : '';
         roundHistory.push({ failed: roundFailed, family: currentFamily, count: toolCalls.length });
         if (roundHistory.length > 8) roundHistory.shift();
@@ -546,6 +562,26 @@ async function runAgentLoop(mainWindow, options) {
  * 提取工具调用名称中的"基类"用于重复检测
  * 例如 curl、fetch、WebFetch 都归为 "http_fetch"
  */
+/**
+ * 工具失败分类（Claude Code 失败恢复引导思路）：把错误归类回传，
+ * 让模型区分"可重试"（超时/网络）与"不可重试"（用户拒绝/输入错误/权限），
+ * 避免对不可恢复的错误盲目重试。
+ */
+function _classifyToolError(errorText, toolName) {
+  const e = String(errorText || '');
+  const tag = (() => {
+    if (/用户拒绝了|permission denied|permission requested|需要用户确认|权限被拒|not permitted|EACCES/i.test(e)) return '用户拒绝/权限';
+    if (/timed? ?out|超时|ETIMEDOUT|ESOCKETTIMEDOUT/i.test(e)) return '超时(可重试)';
+    if (/ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|socket|网络|net::|tunnel/i.test(e)) return '网络错误';
+    if (/ENOENT|not found|no such file|找不到|不存在/i.test(e)) return '路径/文件不存在(检查输入)';
+    if (/is required|must be|必须是|必需|参数校验|invalid.*input|非法|parse|JSON|语法/i.test(e)) return '输入参数错误(修正参数)';
+    if (/exit code|Command failed|命令失败/i.test(e)) return '命令执行失败';
+    if (toolName === 'Write' || toolName === 'Edit' || toolName === 'Read') return '文件操作错误';
+    return '未知错误';
+  })();
+  return `[工具失败: ${tag}]`;
+}
+
 function _toolFamily(name, input) {
   if (name === 'Bash') {
     const cmd = (typeof input === 'object' ? (input.command || '') : '').toLowerCase();
@@ -564,6 +600,15 @@ function _checkStuckSliding(failRounds, totalRounds, allSameFamily) {
   if (failRounds < 3 || failRounds / totalRounds < 0.5) return '';
   const familyHint = allSameFamily ? '（大多数都是同一类工具）' : '';
   return `[系统提示] 最近 ${totalRounds} 轮中有 ${failRounds} 轮工具调用失败${familyHint}。请立即停止当前策略，换一种完全不同的方法，或直接告知用户失败原因。不要再重复尝试类似的操作。`;
+}
+
+/**
+ * 人类可读的 token 数（12.3K / 1.2M）
+ */
+function formatTokens(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
 }
 
 /**
@@ -774,9 +819,19 @@ ${summaryContent}`;
 
     const summaryText = result.content?.[0]?.text || '对话摘要';
 
+    // MiMo Code rebuild injection 思路：摘要之后补"任务清单 + 尾部提醒"，
+    // 防止压缩后 agent 迷失方向。任务来自当前活跃的 taskStore。
+    let tailReminder = '';
+    try {
+      const tasks = taskGetAll().filter(t => t.status !== 'completed');
+      if (tasks.length > 0) {
+        tailReminder = '\n\n## 当前待办任务\n' + tasks.map(t => `- [${t.status}] ${t.name}`).join('\n') + '\n请优先推进这些任务，不要重复已完成的工作。';
+      }
+    } catch (_) {}
+
     return [
       { role: 'user', content: `[系统：以下是对话早期历史的压缩摘要，请将其作为上下文参考，但不要重复执行摘要中已完成的操作]` },
-      { role: 'assistant', content: `📋 对话历史摘要：\n${summaryText}\n\n[以上为早期对话摘要，以下是最近的对话内容]` },
+      { role: 'assistant', content: `📋 对话历史摘要：\n${summaryText}\n\n[以上为早期对话摘要，以下是最近的对话内容]` + tailReminder + '\n\n[下一步] 请基于最近对话继续推进用户的目标；如需回顾早期细节，用 Read/Grep 重新查看相关文件。' },
       ...recentMsgs
     ];
   } catch (err) {
