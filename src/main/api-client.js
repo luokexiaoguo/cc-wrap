@@ -53,6 +53,27 @@ function shouldUseAnthropicFormat(endpoint, model) {
 }
 
 /**
+ * 构建 API 请求 URL
+ * 大多数厂商 OpenAI 兼容 base 以 /v1 结尾（DeepSeek/Qwen/Kimi/MiniMax/Groq/xAI/OpenRouter/Ollama...），
+ * 统一去掉结尾 /v1（或 /anthropic 别名）再追加 /v1/chat/completions。
+ * 少数厂商 base 自带版本路径且 chat/completions 不带 /v1 前缀（否则 404/400）：
+ *   - Gemini OpenAI 兼容: .../v1beta/openai/chat/completions
+ *   - 智谱 GLM: .../paas/v4/chat/completions
+ * Anthropic 格式统一 /v1/messages。
+ */
+function buildApiUrl(endpoint, useAnthropic) {
+  const clean = (endpoint || '').replace(/\/+$/, '');
+  if (useAnthropic) {
+    return clean.replace(/\/anthropic$/i, '') + '/v1/messages';
+  }
+  // OpenAI 格式特例：base 自带版本路径，chat/completions 直接拼在末尾
+  if (/(generativelanguage\.googleapis\.com\/v1beta\/openai|bigmodel\.cn[^\s]*\/paas\/v\d+)$/i.test(clean)) {
+    return clean + '/chat/completions';
+  }
+  return clean.replace(/\/anthropic$/i, '').replace(/\/v1\/?$/i, '') + '/v1/chat/completions';
+}
+
+/**
  * 根据 reasoningEffort 设置修改请求体
  * 自动识别模型，注入对应的思考参数
  * @param {object} body - 请求体对象（会被原地修改）
@@ -172,7 +193,7 @@ async function callAnthropicAPI(messages, tools, system, options) {
     body.tool_choice = { type: 'auto' };
   }
 
-  const url = endpoint.replace(/\/+$/, '').replace(/\/anthropic$/i, '').replace(/\/v1\/?$/i, '') + '/v1/messages';
+  const url = buildApiUrl(endpoint, true);
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -219,7 +240,7 @@ async function callAnthropicStream(messages, tools, system, options, callbacks) 
     body.tool_choice = { type: 'auto' };
   }
 
-  const url = endpoint.replace(/\/+$/, '').replace(/\/anthropic$/i, '').replace(/\/v1\/?$/i, '') + '/v1/messages';
+  const url = buildApiUrl(endpoint, true);
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -353,6 +374,55 @@ function modelSupportsVision(model) {
 }
 
 /**
+ * 测试模型连通性（设置面板"测试"按钮用）
+ * 发一个最小请求验证 endpoint + apiKey + model 是否可用
+ * @returns {Promise<{success: boolean, latencyMs?: number, model?: string, detail?: string, error?: string}>}
+ */
+async function testModelConnection({ model, apiKey, endpoint, maxTokens = 16 }) {
+  const started = Date.now();
+  const finish = (extra) => ({ latencyMs: Date.now() - started, model: model || '', ...extra });
+
+  if (!endpoint) return finish({ success: false, error: '缺少 API 端点（Base URL）' });
+  if (!apiKey) return finish({ success: false, error: '缺少 API Key' });
+
+  const useAnthropic = shouldUseAnthropicFormat(endpoint, model);
+  const url = buildApiUrl(endpoint, useAnthropic);
+
+  const body = {
+    model,
+    max_tokens: useAnthropic ? Math.max(maxTokens, 8) : maxTokens,
+    messages: [{ role: 'user', content: 'ping' }],
+  };
+
+  const headers = useAnthropic
+    ? { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+    : { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!response.ok) {
+      const errText = (await response.text()).slice(0, 500);
+      return finish({ success: false, error: `HTTP ${response.status}: ${errText}` });
+    }
+
+    const data = await response.json();
+    const detail = useAnthropic
+      ? (data.content?.[0]?.text || data.stop_reason || 'ok')
+      : (data.choices?.[0]?.message?.content || 'ok');
+    return finish({ success: true, detail: String(detail).slice(0, 200), returnedModel: data.model || '' });
+  } catch (err) {
+    const msg = err.name === 'AbortError' ? '连接超时（15s）' : err.message;
+    return finish({ success: false, error: msg });
+  }
+}
+
+/**
  * 转换 Anthropic 消息格式到 OpenAI 格式（支持 tool_use/tool_result）
  * @param {string} [model] 用于判断是否需要剥离图片（非视觉模型会 400）
  */
@@ -458,7 +528,7 @@ async function callOpenAIAPI(messages, tools, system, options) {
     body.tools = getOpenAITools(tools);
   }
 
-  const url = endpoint.replace(/\/+$/, '').replace(/\/anthropic$/i, '').replace(/\/v1\/?$/i, '') + '/v1/chat/completions';
+  const url = buildApiUrl(endpoint, false);
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -533,7 +603,7 @@ async function callOpenAIStream(messages, tools, system, options, callbacks) {
     body.tools = getOpenAITools(tools);
   }
 
-  const url = endpoint.replace(/\/+$/, '').replace(/\/anthropic$/i, '').replace(/\/v1\/?$/i, '') + '/v1/chat/completions';
+  const url = buildApiUrl(endpoint, false);
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -697,6 +767,8 @@ module.exports = {
   callOpenAIAPI,
   callOpenAIStream,
   shouldUseAnthropicFormat,
+  buildApiUrl,
   toOpenAIMessagesWithTools,
   modelSupportsVision,
+  testModelConnection,
 };

@@ -12,7 +12,7 @@ npm run rebuild    # Rebuild native modules for current Electron version
 
 **Packaging workflow** (per user preference): before `npm run build`, delete old `dist/*.exe` and `dist/*.exe.blockmap`. The user does not want stale installers in `dist/`. Version bump goes in `package.json` `version` field; `artifactName` `"${productName} Setup ${version}.${ext}"` produces `cc-wrap Setup X.Y.Z.exe`.
 
-There are no automated tests in this repo. Verification is "smoke-test via `npm start`, then manual interaction".
+There are no automated tests in this repo. Verification is "smoke-test via `npm start`, then manual interaction". **Note**: `package.json` still declares `test`/`test:e2e`/`typecheck` scripts, but the scaffolding was removed (commit 645d6f0) — `npm test` fails with "No tests found" (exit 1), `tsconfig` is gone, and the `playwright` bin is not installed. `.github/workflows/ci.yml` runs `npm test` and would currently fail on push/PR. Don't rely on these scripts; fix them (or remove them) if touching CI.
 
 ## Architecture
 
@@ -47,6 +47,8 @@ Terminal IPC channels (node-pty):
 6. Context compression triggers at >80K tokens (progressive: 80–100K keep 8, 100–120K keep 6, 120–150K keep 4, 150K+ keep 2 recent messages; also preserves text-containing assistant messages beyond the window)
 7. **效率优化**: 工具结果普通 1500/错误 600 字符截断；滑动窗口检测卡住（最近 8 轮中 >=3 轮失败且 >=50% 失败率）时注入策略提示
 
+**"一直思考"防卡死不变量**: `runAgentLoop` 的**每一个提前返回路径**（空 API Key、取消、API 异常、超最大轮数）都必须先 `sendToRenderer(mainWindow, 'agent-complete', { success: false, error })` 再 return，否则渲染端收不到完成事件、UI 永久卡在"思考中"。renderer 侧还有三层兜底（`agent-start` `.then` 失败分支、`.catch`、`generateResponse` 外层 catch）恢复 UI 并清 `currentLoopId`。新增提前返回时必须补发 `agent-complete`。
+
 ### 3 级消息队列 (`src/main/task-queue.js`)
 
 借鉴 Claude Code 架构的调度系统：
@@ -79,10 +81,19 @@ Terminal IPC channels (node-pty):
 ### API client (`src/main/api-client.js`)
 
 Auto-detects format based on endpoint/model via `shouldUseAnthropicFormat()`:
-- **Anthropic**: `/v1/messages`, `x-api-key`, SSE events (`content_block_start/delta/stop`, `message_delta`)
-- **OpenAI**: `/v1/chat/completions`, `Bearer`, stream chunks with `tool_calls` delta
+- **Anthropic** (`claude-*` model OR endpoint contains `anthropic.com`): `/v1/messages`, `x-api-key`, SSE events (`content_block_start/delta/stop`, `message_delta`)
+- **OpenAI**: everything else — `/v1/chat/completions`, `Bearer`, stream chunks with `tool_calls` delta
+
+**URL building** — all 5 request paths (Anthropic/OpenAI × stream/non-stream + `testModelConnection`) go through `buildApiUrl(endpoint, useAnthropic)`. Rule: strip trailing `/v1` (or `/anthropic` alias) from the base, then append `/v1/chat/completions`. **Two providers are exceptions** whose base already carries a version path and expect `/chat/completions` WITHOUT the `/v1` prefix — appending `/v1` yields 404/400:
+- Gemini OpenAI-compat: `.../generativelanguage.googleapis.com/v1beta/openai` → `/v1beta/openai/chat/completions`
+- Zhipu GLM: `.../bigmodel.cn/api/paas/v4` → `/paas/v4/chat/completions`
+If you add a new provider and get a 404 on the test button, check this first.
 
 Message format conversion: `toOpenAIMessagesWithTools(messages, system, model)`.
+
+**`testModelConnection({ model, apiKey, endpoint, maxTokens })`** — the Settings "测试" / "测试连接" button backend. Sends a minimal `ping` request (15s timeout) and returns `{ success, latencyMs, returnedModel?, detail?, error? }`. Invoked from renderer via `test-model` IPC channel (added to `INVOKE_CHANNELS` in `preload.js`); `testModel()` in `app.js` handles loading/fallback/toast.
+
+**Reasoning effort auto-adaptation** (`applyReasoningEffort(body, effort, isAnthropic)`): the Settings 思考级别 dropdown (off/low/medium/high) maps to per-model thinking params by model-name sniffing — Claude → `thinking.type`+`budget_tokens`; OpenAI o-series/GPT-5 → `reasoning_effort`; DeepSeek/Qwen → `enable_thinking`; Kimi/Doubao → `thinking.type`; Gemini → `thinkingConfig.thinkingLevel`; GLM/MiMo always reasons. See README for the full matrix. If you add a new model family with a different thinking-param scheme, extend this function and keep `shouldUseAnthropicFormat` consistent.
 
 **Vision detection** (critical): non-vision models reject `image_url` content with HTTP 400. `modelSupportsVision(model)` checks a regex of known vision identifiers (`vision`, `vl`, `gpt-4o`, `claude`, `gemini`, `glm-4v`, etc.) plus a blacklist for `deepseek-(chat|reasoner|v3|coder)`. When false, image content blocks are stripped from the OpenAI payload and replaced with a text placeholder that tells the model to call a vision-capable MCP tool using the local path embedded in the user text.
 
@@ -129,7 +140,7 @@ Hooks `console.log/error/warn` to write both to terminal and a file. `initLogger
 ### Settings tabs
 
 Settings modal has tabs (`data-stab`): `api`, `theme`, `general`, `logs`, `tokens`, `about`.
-- **api** — global API config, temperature slider (0–2), model add/edit forms with per-model temperature + maxTokens
+- **api** — global API config, temperature slider (0–2), model add/edit forms with per-model temperature + maxTokens. 每个模型卡片有"测试"按钮、全局配置区有"测试连接"按钮、编辑弹窗有"测试连接"按钮（结果内联显示）。测试走 `test-model` IPC → `testModelConnection()`
 - **theme** — dark/light toggle, font size slider
 - **general** — language, work directory, custom system prompt, always-allowed tools, auto-save, cache clear
 - **logs** — search (300ms debounce), refresh, clear, export buttons, `<pre>` viewer
@@ -171,6 +182,8 @@ Single ~4850-line file holding a global `state` object
 **Token heatmap timezone**: All date grouping uses `toLocalDay()` (wraps `getFullYear()/getMonth()/getDate()`) not `toISOString()` — the latter returns UTC and causes date-offset bugs for non-UTC users (e.g. Beijing UTC+8 at midnight shows as previous day in UTC). Any new date extraction from timestamps must use local timezone methods.
 
 **Export conversation**: the toolbar "导出" button formats conversation as Markdown and calls `export-conversation` IPC which opens a native save dialog (default directory = workDir).
+
+**Model config lookup**: `generateResponse()` and `compactConversation()` match `models[j].id === defaultModel || models[j].name === defaultModel` (old configs may store the display name). If `defaultModel` points to nothing, both fall back to `models[0]`; `generateResponse` additionally persists the corrected `defaultModel` via `set-config` so the next send doesn't lose endpoint/apiKey again.
 
 ```text
 state object fields: conversations, currentConversation, config, models, skills, mcpServers, mcpStatuses, workDir, memories, isGenerating, generatingConversationId, attachedImage, tasks, openFiles, agentMessages, etc.
@@ -247,3 +260,5 @@ All in `app.getPath('userData')` (Windows: `%APPDATA%/cc-wrap/`):
 - **Multi-conversation streaming guards**: All three streaming event handlers (`agent-stream-text`, `agent-stream-tool-start`, `agent-stream-tool-result`) use the `isGenConv` pattern — `state.generatingConversationId === state.currentConversation.id`. Data model updates always go to the generating conversation (found by `generatingConversationId`); DOM updates only happen when `isGenConv` is true. Every code path that sets `isGenerating = false` must also clear `generatingConversationId = null` (currently 4 paths: `agent-complete`, `agent-start` catch, `generateResponse()` catch, `stopGeneration()`). Missing any of these will leave stale state. `setThinking()` also uses this guard to avoid showing the thinking indicator on non-generating conversations.
 - **ReadImage async loading**: ReadImage returns file path (not base64) to avoid IPC size limits. Renderer loads via `read-file-as-data-url` IPC. Both `main.js` handler and `loadToolResultImages()` must convert Git Bash paths (`/e/...`) to Windows paths. Images must be rendered in message body, not just inside collapsed tool call cards.
 - **MCP image data in agent-loop**: When MCP tools return `{ text, images }` structured objects, `rendererPayloadMcpImage` is set from parallel path variables that must be declared before the loop and reset after `sendToRenderer`.
+- **Provider endpoint URL building**: always build request URLs via `buildApiUrl()` in `api-client.js` — never inline the `endpoint.replace(/\/v1/...)... + '/v1/...'` pattern. Gemini (`/v1beta/openai`) and Zhipu GLM (`/paas/v4`) are special-cased there; inlining breaks them with 404/400 and the test button is the fastest way to notice.
+- **`agent-complete` on every early return**: any new `return { success:false }` path added to `runAgentLoop` must send `agent-complete` first, or the chat UI sticks on "思考中" forever. Keep the renderer 3-layer fallback (`agent-start` `.then` failure / `.catch` / `generateResponse` catch) intact when touching this.

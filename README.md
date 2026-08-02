@@ -52,18 +52,27 @@ AI 自主决定调用哪些工具，多轮协作完成任务。
 
 | 模型 | 协议 |
 |------|------|
-| Claude (Opus 4.7 / Sonnet 4.6 / Haiku 4.5) | Anthropic Messages API |
-| GPT-5.5 / GPT-5.4 / o3 / o4-mini | OpenAI Chat API |
+| Claude (Opus 4.8 / Sonnet 5 / Sonnet 4.6 / Haiku 4.5) | Anthropic Messages API |
+| GPT-5.6 / GPT-5.5 / GPT-5.4 / o3 / o4-mini | OpenAI Chat API |
 | DeepSeek V4-Pro / V4-Flash / R1 | OpenAI 兼容 |
-| Qwen3.6 / QwQ | OpenAI 兼容 |
-| Kimi K2.6 | OpenAI 兼容 |
+| Qwen 3.7 Max / Qwen3.6 / Qwen3-Coder | OpenAI 兼容 |
+| Kimi K2.6 / K3 | OpenAI 兼容 |
 | Doubao-Seed-2.0 | OpenAI 兼容 |
-| MiniMax M2.7 | OpenAI 兼容 |
-| GLM-5.1 / GLM-Z1 | OpenAI 兼容 |
-| Gemini 2.5 / 3.x | Google API |
+| MiniMax M3 / M2.7 | OpenAI 兼容 |
+| GLM-5.2 / GLM-5.1 / GLM-Z1 | OpenAI 兼容 |
+| Gemini 3.x / 2.5 | OpenAI 兼容 / Google API |
+| Grok 4.x (xAI) | OpenAI 兼容 |
 | MiMo V2 | OpenAI 兼容 |
 
-双协议自动识别：Anthropic 格式走 `/v1/messages` SSE，OpenAI 格式走 `/v1/chat/completions` 流式。非视觉模型自动剥离图片，避免 400 错误。
+双协议自动识别：Anthropic 格式走 `/v1/messages` SSE，OpenAI 格式走 `/v1/chat/completions` 流式。非视觉模型自动剥离图片，避免 400 错误。Gemini（`/v1beta/openai`）与智谱（`/paas/v4`）等自带版本路径的端点自动适配，无需手动改 URL。
+
+### ✅ 模型连通性一键测试
+
+配置好端点 / 密钥后，一键验证能否连通：
+
+- **每个模型卡片**都有"测试"按钮，立即验证 Base URL + API Key + 模型 ID 是否可用
+- **全局配置区**可测试默认模型，编辑弹窗内联显示测试结果
+- 返回**实际延迟**与**API 响应的模型名**，失败时给出具体错误（HTTP 状态码 + 响应内容），快速定位密钥错误 / 端点 404 / 超时
 
 ### 💡 工具调用智能展开
 
@@ -148,6 +157,7 @@ AI 自动沉淀关键信息，跨对话持久化。
 | 文件操作 | Read / Write / Edit / Glob / Grep，支持文本 / .docx / .pdf / .xlsx / .csv，自动编码识别 |
 | Bash 执行 | 非阻塞 spawn，Git Bash / cmd 自动探测，支持取消、超时、危险命令拦截 |
 | 多模型 | 13+ 种模型，Anthropic + OpenAI + Google 三协议，视觉模型自动识别 |
+| 模型测试 | 每个模型 / 全局配置一键测试连通性，返回延迟 + 实际模型名 + 具体错误 |
 | MCP 集成 | stdio + HTTP/SSE 双模式，一键安装，自动重连，输入参数验证 |
 | 集成终端 | Ctrl+` 切换，node-pty 真终端，可拖拽面板 |
 | 智能展开 | AskUserQuestion / Write / Edit 自动展开，其他折叠 |

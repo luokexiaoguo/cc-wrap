@@ -1,4 +1,4 @@
-const { shouldUseAnthropicFormat } = require('./api-client');
+const { shouldUseAnthropicFormat, testModelConnection } = require('./api-client');
 const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeImage, shell, Tray, Menu, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -1705,6 +1705,20 @@ ${conversationText}
       testClient.close();
       return { success: false, error: err.message };
     }
+  });
+
+  // 模型连通性测试（设置面板"测试"按钮）
+  ipcMain.handle('test-model', async (event, cfg) => {
+    const config = readDecryptedConfig(store);
+    const model = (cfg && cfg.model) || config.defaultModel;
+    const endpoint = (cfg && cfg.endpoint) || config.apiEndpoint;
+    const apiKey = (cfg && cfg.apiKey) || config.apiKey;
+    return testModelConnection({
+      model,
+      apiKey,
+      endpoint,
+      maxTokens: (cfg && cfg.maxTokens) || 16
+    });
   });
 
   // MCP 连接/断开/状态

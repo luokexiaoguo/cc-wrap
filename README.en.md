@@ -52,18 +52,27 @@ One client for all major models:
 
 | Model | Protocol |
 |-------|----------|
-| Claude (Opus 4.7 / Sonnet 4.6 / Haiku 4.5) | Anthropic Messages API |
-| GPT-5.5 / GPT-5.4 / o3 / o4-mini | OpenAI Chat API |
+| Claude (Opus 4.8 / Sonnet 5 / Sonnet 4.6 / Haiku 4.5) | Anthropic Messages API |
+| GPT-5.6 / GPT-5.5 / GPT-5.4 / o3 / o4-mini | OpenAI Chat API |
 | DeepSeek V4-Pro / V4-Flash / R1 | OpenAI compatible |
-| Qwen3.6 / QwQ | OpenAI compatible |
-| Kimi K2.6 | OpenAI compatible |
+| Qwen 3.7 Max / Qwen3.6 / Qwen3-Coder | OpenAI compatible |
+| Kimi K2.6 / K3 | OpenAI compatible |
 | Doubao-Seed-2.0 | OpenAI compatible |
-| MiniMax M2.7 | OpenAI compatible |
-| GLM-5.1 / GLM-Z1 | OpenAI compatible |
-| Gemini 2.5 / 3.x | Google API |
+| MiniMax M3 / M2.7 | OpenAI compatible |
+| GLM-5.2 / GLM-5.1 / GLM-Z1 | OpenAI compatible |
+| Gemini 3.x / 2.5 | OpenAI compatible / Google API |
+| Grok 4.x (xAI) | OpenAI compatible |
 | MiMo V2 | OpenAI compatible |
 
-Auto-detects protocol: Anthropic format uses `/v1/messages` SSE, OpenAI format uses `/v1/chat/completions` streaming. Non-vision models auto-strip images to avoid 400 errors.
+Auto-detects protocol: Anthropic format uses `/v1/messages` SSE, OpenAI format uses `/v1/chat/completions` streaming. Non-vision models auto-strip images to avoid 400 errors. Versioned-path endpoints like Gemini (`/v1beta/openai`) and Zhipu GLM (`/paas/v4`) are auto-adapted — no manual URL tweaking.
+
+### ✅ One-Click Model Connection Test
+
+Verify connectivity right after configuring endpoint / key:
+
+- **Per-model card** "Test" button verifies Base URL + API Key + model ID
+- **Global config** can test the default model; edit dialog shows results inline
+- Returns **actual latency** and the **model name from the API response**; failures show the concrete error (HTTP status + body) to quickly pinpoint bad keys / endpoint 404s / timeouts
 
 ### 💡 Smart Tool Call Expansion
 
@@ -148,6 +157,7 @@ Inject domain knowledge into System Prompt for better AI understanding.
 | File ops | Read / Write / Edit / Glob / Grep, supports text / .docx / .pdf / .xlsx / .csv, auto encoding detection |
 | Bash execution | Non-blocking spawn, Git Bash / cmd auto-detect, cancel + timeout, dangerous command filtering |
 | Multi-model | 13+ models, Anthropic + OpenAI + Google protocols, vision model auto-detect |
+| Model test | One-click connectivity test per model / global config, returns latency + actual model name + concrete error |
 | MCP integration | stdio + HTTP/SSE dual mode, one-click install, auto-reconnect, input validation |
 | Integrated terminal | Ctrl+` toggle, node-pty real terminal, draggable panel |
 | Smart expansion | AskUserQuestion / Write / Edit auto-expand, others collapsed |

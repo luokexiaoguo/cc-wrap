@@ -5,7 +5,7 @@ try { _hljs = require('highlight.js'); } catch (_) {}
 const INVOKE_CHANNELS = [
   'get-config', 'set-config',
   'window-minimize', 'window-maximize', 'window-close',
-  'get-models', 'add-model', 'remove-model',
+  'get-models', 'add-model', 'remove-model', 'test-model',
   'tool-read', 'tool-write', 'tool-edit', 'tool-glob', 'tool-grep',
   'tool-bash', 'tool-list-dir',
   'get-file-tree', 'select-folder', 'get-work-dir', 'set-work-dir',

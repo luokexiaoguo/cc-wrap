@@ -131,6 +131,11 @@ async function runAgentLoop(mainWindow, options) {
     };
 
     if (!config.apiKey) {
+      // 必须发送 agent-complete，否则渲染端收不到完成事件，UI 会一直卡在"思考中"
+      sendToRenderer(mainWindow, 'agent-complete', {
+        success: false,
+        error: '请先在设置中配置 API Key'
+      });
       return { success: false, error: '请先在设置中配置 API Key' };
     }
 

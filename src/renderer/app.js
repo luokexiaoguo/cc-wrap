@@ -22,6 +22,8 @@ var I18N = {
     endpointDefault: '默认', keySet: '已设置', keyNotSet: '未设置',
     editModel: '编辑', deleteModel: '删除', confirmDelete: '确定删除模型',
     saved: '已保存', added: '已添加', fillNameId: '请填写模型名称和ID',
+    testModel: '测试', testConnect: '测试连接', testingConn: '正在测试连接...',
+    testSuccess: '连接成功', testFailed: '连接失败', testNoEndpoint: '请先填写 API 端点（Base URL）', testNoModel: '请先填写模型 ID',
     reasoningEffort: '思考级别', effortOff: '关闭', effortLow: '低', effortMedium: '中', effortHigh: '高',
     // 主题
     chooseTheme: '选择主题', darkMode: '深色模式', lightMode: '浅色模式',
@@ -59,6 +61,8 @@ var I18N = {
     endpointDefault: 'default', keySet: 'Set', keyNotSet: 'Not set',
     editModel: 'Edit', deleteModel: 'Delete', confirmDelete: 'Are you sure you want to delete model',
     saved: 'Saved', added: 'Added', fillNameId: 'Please enter model name and ID',
+    testModel: 'Test', testConnect: 'Test Connection', testingConn: 'Testing connection...',
+    testSuccess: 'Connected', testFailed: 'Connection failed', testNoEndpoint: 'Please fill in the Base URL first', testNoModel: 'Please enter a model ID first',
     reasoningEffort: 'Thinking', effortOff: 'Off', effortLow: 'Low', effortMedium: 'Medium', effortHigh: 'High',
     // Theme
     chooseTheme: 'Choose Theme', darkMode: 'Dark Mode', lightMode: 'Light Mode',
@@ -2554,10 +2558,18 @@ async function generateResponse() {
   var selectedModelId = state.config.defaultModel;
   var modelConfig = null;
   for (var j = 0; j < state.models.length; j++) {
-    if (state.models[j].id === selectedModelId) {
+    if (state.models[j].id === selectedModelId || state.models[j].name === selectedModelId) {
       modelConfig = state.models[j];
       break;
     }
+  }
+  // 兜底：defaultModel 指向的模型不存在（如旧配置残留）时，回退到第一个可用模型，
+  // 并顺手修正持久化的 defaultModel，避免下次发送又丢 endpoint/apiKey 导致"一直思考"
+  if (!modelConfig && state.models.length > 0) {
+    modelConfig = state.models[0];
+    state.config.defaultModel = modelConfig.id;
+    window.api.invoke('set-config', 'defaultModel', modelConfig.id);
+    log('[generateResponse] defaultModel 无效，回退到: ' + modelConfig.id);
   }
 
   // 生成唯一的 loop ID
@@ -2586,10 +2598,22 @@ async function generateResponse() {
 // 启动 agent loop（异步，通过 IPC 事件接收结果）
     window.api.invoke('agent-start', apiOptions).then(function(result) {
       log('Agent loop 返回: ' + JSON.stringify(result.success));
+      // 兜底：agent-loop 若未发送 agent-complete（如空 key 等早退路径），这里恢复 UI，避免永久"思考中"
+      if (result && result.success === false && state.isGenerating) {
+        state.isGenerating = false;
+        state.generatingConversationId = null;
+        state.currentLoopId = null;
+        setThinking(false);
+        clearStreamingMarks();
+        var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
+        if (sendBtn) sendBtn.style.display = 'flex';
+        if (stopBtn) stopBtn.style.display = 'none';
+      }
     }).catch(function(err) {
       logError('Agent loop 失败: ' + err.message);
       state.isGenerating = false;
       state.generatingConversationId = null;
+      state.currentLoopId = null;
       setThinking(false);
       clearStreamingMarks();
       var sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
@@ -3005,15 +3029,19 @@ async function compactConversation() {
   // 获取模型配置（apiKey / endpoint）
   var modelConfig = null;
   for (var j = 0; j < state.models.length; j++) {
-    if (state.models[j].id === state.config.defaultModel) {
+    if (state.models[j].id === state.config.defaultModel || state.models[j].name === state.config.defaultModel) {
       modelConfig = state.models[j];
       break;
     }
   }
+  // 与 generateResponse 一致：defaultModel 无效时回退到第一个模型
+  if (!modelConfig && state.models.length > 0) {
+    modelConfig = state.models[0];
+  }
 
   try {
     var compactOpts = {
-      model: state.config.defaultModel,
+      model: modelConfig ? modelConfig.id : state.config.defaultModel,
       maxTokens: 500,
       temperature: 0.3
     };
@@ -3860,7 +3888,10 @@ function renderSettingsTab(tab) {
       '<div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="cfgMaxTokens" value="' + (state.config.maxTokens || 4096) + '" /></div>' +
       '<div class="form-group"><label>' + t('temperature') + '</label><input type="range" id="cfgTemperature" min="0" max="2" step="0.05" value="' + (state.config.temperature ?? 0.7) + '" style="width:120px;vertical-align:middle" />' +
       ' <span id="cfgTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (state.config.temperature ?? 0.7) + '</span></div></div>' +
-      '<button class="btn-primary" id="saveApiBtn" style="margin-bottom:20px">' + t('saveConfig') + '</button>' +
+      '<div style="display:flex;gap:8px;margin-bottom:20px">' +
+      '<button class="btn-primary" id="saveApiBtn">' + t('saveConfig') + '</button>' +
+      '<button class="btn-secondary" id="testGlobalBtn">' + t('testConnect') + '</button>' +
+      '</div>' +
       '<div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">' +
       '<div style="font-size:14px;font-weight:600;margin-bottom:12px">' + t('addModel') + '</div>' +
       '<div class="form-group"><label>' + t('modelName') + '</label><input id="customModelName" placeholder="例如: MiniMax" /></div>' +
@@ -3885,6 +3916,19 @@ function renderSettingsTab(tab) {
         await window.api.invoke('set-config', 'temperature', parseFloat($('cfgTemperature').value));
         state.config = await window.api.invoke('get-config');
         renderModelSelect(); showToast(t('saved'));
+      };
+    }
+
+    // 全局"测试连接"：用表单当前值（未保存也能测）测默认模型
+    var testGlobalBtn = $('testGlobalBtn');
+    if (testGlobalBtn) {
+      testGlobalBtn.onclick = function() {
+        testModel({
+          model: $('cfgModel').value,
+          apiKey: $('cfgApiKey').value,
+          endpoint: state.config.apiEndpoint,
+          maxTokens: parseInt($('cfgMaxTokens').value) || 16
+        }, this);
       };
     }
 
@@ -4280,10 +4324,20 @@ function renderModelList() {
         (m.reasoningEffort && m.reasoningEffort !== 'off' ? '<div class="model-card-detail">' + t('reasoningEffort') + ': ' + t('effort' + m.reasoningEffort.charAt(0).toUpperCase() + m.reasoningEffort.slice(1)) + '</div>' : '') +
       '</div>' +
       '<div class="model-card-actions">' +
+        '<button class="btn-sm" data-test="' + i + '">' + t('testModel') + '</button>' +
         '<button class="btn-sm" data-edit="' + i + '">' + t('editModel') + '</button>' +
         '<button class="btn-sm" data-remove="' + i + '" style="color:var(--accent-red)">' + t('deleteModel') + '</button>' +
       '</div></div>';
   }).join('');
+
+  area.querySelectorAll('[data-test]').forEach(function(btn) {
+    btn.onclick = function() {
+      var idx = parseInt(this.getAttribute('data-test'));
+      var m = models[idx];
+      if (!m) return;
+      testModel({ model: m.id, apiKey: m.apiKey, endpoint: m.endpoint, maxTokens: m.maxTokens || 16 }, this);
+    };
+  });
 
   area.querySelectorAll('[data-remove]').forEach(function(btn) {
     btn.onclick = async function() {
@@ -4315,6 +4369,45 @@ function rebuildModelList() {
   }
 }
 
+// 模型连通性测试（设置面板"测试"/"测试连接"按钮）
+// config: { model, apiKey, endpoint, maxTokens }；模型没配 endpoint/apiKey 时回退全局配置
+// btnEl: 可选，测试期间禁用并显示"测试中..."，完成后恢复原文案
+// resultEl: 可选，测试结果写入该容器（编辑弹窗内联展示）
+function testModel(config, btnEl, resultEl) {
+  config = config || {};
+  if (!config.model) { showToast(t('testNoModel'), 'warning'); return; }
+  // 模型未单独配置时回退全局 endpoint/apiKey
+  var endpoint = config.endpoint || state.config.apiEndpoint;
+  var apiKey = config.apiKey || state.config.apiKey;
+  if (!endpoint) { showToast(t('testNoEndpoint'), 'warning'); return; }
+
+  var opts = { model: config.model, apiKey: apiKey, endpoint: endpoint, maxTokens: config.maxTokens || 16 };
+  var origText = btnEl ? btnEl.textContent : null;
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = t('testingConn'); }
+  if (resultEl) resultEl.textContent = t('testingConn') + '...';
+  log('模型测试开始: model=' + config.model + ' endpoint=' + endpoint);
+
+  window.api.invoke('test-model', opts).then(function(result) {
+    if (result && result.success) {
+      var detail = result.returnedModel ? ' [' + result.returnedModel + ']' : '';
+      var msg = t('testSuccess') + '（' + result.latencyMs + 'ms）' + detail;
+      showToast(msg, 'success');
+      if (resultEl) resultEl.textContent = '✓ ' + msg;
+    } else {
+      var err = (result && result.error) || '未知错误';
+      log('模型测试失败: ' + err);
+      showToast(t('testFailed') + ': ' + err.slice(0, 150), 'error');
+      if (resultEl) resultEl.textContent = '✗ ' + t('testFailed') + ': ' + err;
+    }
+  }).catch(function(e) {
+    log('模型测试异常: ' + e.message);
+    showToast(t('testFailed') + ': ' + e.message, 'error');
+    if (resultEl) resultEl.textContent = '✗ ' + t('testFailed') + ': ' + e.message;
+  }).finally(function() {
+    if (btnEl) { btnEl.disabled = false; btnEl.textContent = origText || t('testModel'); }
+  });
+}
+
 function openEditModelModal(idx) {
   var m = state.config.models[idx];
   if (!m) return;
@@ -4332,7 +4425,9 @@ function openEditModelModal(idx) {
       '<div class="form-group"><label>' + t('maxTokens') + '</label><input type="number" id="editModelMaxTokens" value="' + (m.maxTokens || '') + '" placeholder="默认" style="width:100%" /></div>' +
       '<div class="form-group"><label>' + t('temperature') + '</label><input type="range" id="editModelTemperature" min="0" max="2" step="0.05" value="' + (m.temperature ?? state.config.temperature ?? 0.7) + '" style="width:120px;vertical-align:middle" />' +
       ' <span id="editModelTemperatureVal" style="font-size:13px;color:var(--text-secondary)">' + (m.temperature ?? state.config.temperature ?? 0.7) + '</span></div>' +
+      '<div class="edit-test-result" style="font-size:13px;margin-bottom:8px;min-height:16px;color:var(--text-secondary);word-break:break-all"></div>' +
       '<div class="modal-actions">' +
+        '<button class="btn-secondary edit-test-btn">' + t('testConnect') + '</button>' +
         '<button class="btn-secondary edit-cancel-btn">取消</button>' +
         '<button class="btn-primary edit-save-btn">' + t('saveConfig') + '</button>' +
       '</div>' +
@@ -4344,6 +4439,17 @@ function openEditModelModal(idx) {
   overlay.querySelector('.edit-cancel-btn').onclick = function() { overlay.remove(); };
   overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
   setupTempSlider('editModelTemperature', 'editModelTemperatureVal');
+
+  // 测试连接：用表单当前值（未保存也能测），结果内联显示在弹窗里
+  overlay.querySelector('.edit-test-btn').onclick = function() {
+    var testOpts = {
+      model: ($('editModelId') || {}).value ? $('editModelId').value.trim() : m.id,
+      apiKey: ($('editModelApiKey') || {}).value.trim(),
+      endpoint: ($('editModelEndpoint') || {}).value.trim(),
+      maxTokens: parseInt(($('editModelMaxTokens') || {}).value) || 16
+    };
+    testModel(testOpts, overlay.querySelector('.edit-test-btn'), overlay.querySelector('.edit-test-result'));
+  };
 
   overlay.querySelector('.edit-save-btn').onclick = async function() {
     var name = $('editModelName').value.trim();
